@@ -1,3 +1,4 @@
+pub mod cli_install;
 pub mod commands;
 pub mod recent;
 pub mod render;
@@ -6,12 +7,12 @@ pub mod watcher;
 
 use commands::AppState;
 use settings::Layout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Wry};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry>> {
     let state = app.state::<AppState>();
@@ -29,7 +30,10 @@ pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry
     let active = *state.active.lock().unwrap();
     let layout = state.settings.lock().unwrap().layout;
 
+    let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "rsmd")
+        .item(&install_cli)
+        .separator()
         .item(&PredefinedMenuItem::quit(app, None)?)
         .build()?;
     // macOS WKWebView 的 ⌘C/⌘A 需要菜单路由，否则快捷键不生效
@@ -128,6 +132,30 @@ fn config_dir(app: &AppHandle) -> std::path::PathBuf {
     app.path().app_config_dir().expect("config dir must resolve")
 }
 
+/// Install 'md' Command 菜单项：把启动脚本写入 ~/.local/bin，结果弹窗反馈。
+/// `tauri dev` 跑裸二进制时找不到 .app，脚本退化为仅按 bundle id 解析。
+fn install_cli(app: &AppHandle) {
+    let bundle = std::env::current_exe().ok().and_then(|exe| {
+        exe.ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(Path::to_path_buf)
+    });
+    let result = app.path().home_dir().map_err(|e| e.to_string()).and_then(|home| {
+        cli_install::install(&home.join(".local/bin"), bundle.as_deref(), &app.config().identifier)
+    });
+    let (kind, msg) = match result {
+        Ok(target) => (
+            MessageDialogKind::Info,
+            format!(
+                "Installed {}.\nMake sure ~/.local/bin is on your PATH.",
+                target.display()
+            ),
+        ),
+        Err(e) => (MessageDialogKind::Error, e),
+    };
+    app.dialog().message(msg).title("Install 'md' Command").kind(kind).show(|_| {});
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         // 必须是第一个 plugin：第二实例的 argv 转发到已有实例后立即退出
@@ -178,6 +206,7 @@ pub fn run() {
                             }
                         });
                 }
+                "install-cli" => install_cli(app),
                 "close-tab" => commands::close_active(app),
                 "next-tab" => commands::cycle(app, 1),
                 "prev-tab" => commands::cycle(app, -1),
