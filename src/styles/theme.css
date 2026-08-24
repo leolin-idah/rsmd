@@ -49,6 +49,10 @@ body[data-layout="side-list"] #shell {
   max-width: 860px;
   margin: 0 auto;
   padding: 32px 24px;
+  /* WebKit 跨块选区会把高亮 gap 填充到最近 selection root（此前是全宽的
+     .pane，因其 overflow 而成为 root），导致选中多行时高亮铺满窗口。
+     position: relative 让本元素成为 selection root，把高亮限制在内容列内。 */
+  position: relative;
 }
 
 /* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
