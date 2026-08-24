@@ -1,0 +1,224 @@
+@import "github-markdown-css/github-markdown.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bgColor-default, #fff);
+  overflow: hidden; /* 滚动条属于各 pane，而非 body */
+}
+
+/* 布局壳：tabs 布局 tab 条横向置顶，side-list 布局列表纵向靠左 */
+#shell {
+  display: flex;
+  height: 100%;
+}
+
+body[data-layout="tabs"] #shell {
+  flex-direction: column;
+}
+
+body[data-layout="side-list"] #shell {
+  flex-direction: row;
+}
+
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+#panes {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 每文档常驻一个 pane，滚动位置各自独立；切换只改 display */
+.pane {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.pane > .markdown-body {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+/* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
+
+#tablist {
+  display: flex;
+  flex: none;
+  background: #f6f8fa;
+  font-family: -apple-system, sans-serif;
+  font-size: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body[data-layout="tabs"] #tablist {
+  flex-direction: row;
+  overflow-x: auto;
+  border-bottom: 1px solid #d0d7de;
+}
+
+body[data-layout="side-list"] #tablist {
+  flex-direction: column;
+  width: 220px;
+  overflow-y: auto;
+  border-right: 1px solid #d0d7de;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  color: #57606a;
+  cursor: default;
+  white-space: nowrap;
+}
+
+body[data-layout="tabs"] .tab {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 200px;
+  border-right: 1px solid #d0d7de;
+}
+
+.tab.active {
+  background: var(--bgColor-default, #fff);
+  color: #1f2328;
+}
+
+.tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #bf8700;
+}
+
+.tab-close {
+  flex: none;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+  visibility: hidden;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  #tablist {
+    background: #161b22;
+  }
+
+  body[data-layout="tabs"] #tablist {
+    border-bottom-color: #30363d;
+  }
+
+  body[data-layout="side-list"] #tablist {
+    border-right-color: #30363d;
+  }
+
+  body[data-layout="tabs"] .tab {
+    border-right-color: #30363d;
+  }
+
+  .tab {
+    color: #8b949e;
+  }
+
+  .tab.active {
+    background: var(--bgColor-default, #0d1117);
+    color: #e6edf3;
+  }
+
+  .tab-dot {
+    background: #d29922;
+  }
+
+  .tab-close:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+.welcome {
+  color: #888;
+  text-align: center;
+  margin-top: 40vh;
+  font-family: -apple-system, sans-serif;
+}
+
+.banner {
+  flex: none;
+  padding: 8px 16px;
+  background: #fff3cd;
+  color: #664d03;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .banner {
+    background: #4d3800;
+    color: #ffe69c;
+  }
+}
+
+/* Shiki 双主题：暗色下切换到 --shiki-dark 变量 */
+@media (prefers-color-scheme: dark) {
+  .shiki,
+  .shiki span {
+    color: var(--shiki-dark) !important;
+    background-color: var(--shiki-dark-bg) !important;
+  }
+}
+
+.mermaid-block {
+  background: transparent;
+  text-align: center;
+}
+
+.enhance-error {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #ffebe9;
+  color: #cf222e;
+  font-size: 12px;
+  font-family: -apple-system, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .enhance-error {
+    background: #490202;
+    color: #ff8182;
+  }
+}

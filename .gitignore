@@ -1,0 +1,8 @@
+node_modules
+src-tauri/target
+.idea/
+dist
+src-tauri/gen/schemas/
+tmp/
+.superpowers/
+.DS_Store
