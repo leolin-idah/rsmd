@@ -6,7 +6,7 @@ pub mod settings;
 pub mod watcher;
 
 use commands::AppState;
-use settings::Layout;
+use settings::{Layout, TocSide};
 use std::path::{Path, PathBuf};
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
@@ -30,6 +30,7 @@ pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry
     let active = *state.active.lock().unwrap();
     let settings = *state.settings.lock().unwrap();
     let layout = settings.layout;
+    let toc_side = settings.toc_side;
 
     let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "rsmd")
@@ -65,13 +66,28 @@ pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry
     let layout_side = CheckMenuItemBuilder::with_id("layout:sideList", "Side List")
         .checked(layout == Layout::SideList)
         .build(app)?;
-    let toc_item = CheckMenuItemBuilder::with_id("toggle-toc", "Table of Contents")
+    let toc_show = CheckMenuItemBuilder::with_id("toggle-toc", "Show")
         .accelerator("Alt+CmdOrCtrl+T")
         .checked(settings.toc)
         .build(app)?;
+    // TOC 隐藏时位置无从谈起，置灰而非默默失效
+    let toc_left = CheckMenuItemBuilder::with_id("toc-side:left", "Left")
+        .checked(toc_side == TocSide::Left)
+        .enabled(settings.toc)
+        .build(app)?;
+    let toc_right = CheckMenuItemBuilder::with_id("toc-side:right", "Right")
+        .checked(toc_side == TocSide::Right)
+        .enabled(settings.toc)
+        .build(app)?;
+    let toc_menu = SubmenuBuilder::new(app, "Table of Contents")
+        .item(&toc_show)
+        .separator()
+        .item(&toc_left)
+        .item(&toc_right)
+        .build()?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&SubmenuBuilder::new(app, "Layout").item(&layout_tabs).item(&layout_side).build()?)
-        .item(&toc_item)
+        .item(&toc_menu)
         .build()?;
 
     // ⌘W 必须走菜单（macOS 强语义 + 焦点不在 webview 时 keydown 收不到）；
@@ -139,6 +155,18 @@ fn toggle_toc(app: &AppHandle) {
     let s = {
         let mut guard = state.settings.lock().unwrap();
         guard.toc = !guard.toc;
+        *guard
+    };
+    settings::save(&config_dir(app), &s);
+    let _ = app.emit("settings-changed", &s);
+    rebuild_menu(app);
+}
+
+fn set_toc_side(app: &AppHandle, side: TocSide) {
+    let state = app.state::<AppState>();
+    let s = {
+        let mut guard = state.settings.lock().unwrap();
+        guard.toc_side = side;
         *guard
     };
     settings::save(&config_dir(app), &s);
@@ -231,6 +259,8 @@ pub fn run() {
                 "layout:tabs" => set_layout(app, Layout::Tabs),
                 "layout:sideList" => set_layout(app, Layout::SideList),
                 "toggle-toc" => toggle_toc(app),
+                "toc-side:left" => set_toc_side(app, TocSide::Left),
+                "toc-side:right" => set_toc_side(app, TocSide::Right),
                 _ => {
                     if let Some(idx) = id.strip_prefix("recent:")
                         && let Ok(i) = idx.parse::<usize>()

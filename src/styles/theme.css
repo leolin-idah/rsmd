@@ -188,7 +188,7 @@ body[data-layout="tabs"] .tab {
   }
 }
 
-/* ---- TOC：pane 内右侧 sticky 列，滚动跟随高亮 ---- */
+/* ---- TOC：pane 内侧边 sticky 列，滚动跟随高亮 ---- */
 
 nav.toc {
   flex: none;
@@ -205,6 +205,13 @@ nav.toc {
 
 body[data-toc="off"] nav.toc {
   display: none;
+}
+
+/* 左置只翻转 flex 顺序与内边距：DOM 仍是「内容 + TOC」，
+   refreshToc / morphdom 无需感知该设置 */
+body[data-toc-side="left"] nav.toc {
+  order: -1;
+  padding: 32px 0 32px 12px;
 }
 
 .toc ul {

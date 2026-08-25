@@ -23,6 +23,7 @@ interface DocClosedPayload {
 export interface Settings {
   layout: "tabs" | "sideList";
   toc: boolean;
+  tocSide: "left" | "right";
 }
 
 function globalBanner(message: string): void {
@@ -40,6 +41,7 @@ function docBannerClear(docId: DocId): void {
 function applySettings(s: Settings): void {
   document.body.dataset.layout = s.layout === "sideList" ? "side-list" : "tabs";
   document.body.dataset.toc = s.toc ? "on" : "off";
+  document.body.dataset.tocSide = s.tocSide;
 }
 
 function installKeyboardShortcuts(): void {

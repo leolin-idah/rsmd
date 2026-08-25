@@ -9,17 +9,26 @@ pub enum Layout {
     SideList,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum TocSide {
+    Left,
+    #[default]
+    Right,
+}
+
 // `default` 保证未来加字段时旧 settings.json 仍可读
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub layout: Layout,
     pub toc: bool,
+    pub toc_side: TocSide,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { layout: Layout::default(), toc: true }
+        Self { layout: Layout::default(), toc: true, toc_side: TocSide::default() }
     }
 }
 
@@ -55,7 +64,7 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { layout: Layout::SideList, toc: true };
+        let s = Settings { layout: Layout::SideList, toc: true, toc_side: TocSide::Right };
         save(dir.path(), &s);
         assert_eq!(load(dir.path()), s);
     }
@@ -92,7 +101,31 @@ mod tests {
     #[test]
     fn toc_off_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { layout: Layout::Tabs, toc: false };
+        let s = Settings { layout: Layout::Tabs, toc: false, toc_side: TocSide::Right };
+        save(dir.path(), &s);
+        assert_eq!(load(dir.path()), s);
+    }
+
+    #[test]
+    fn toc_side_defaults_to_right() {
+        assert_eq!(Settings::default().toc_side, TocSide::Right);
+    }
+
+    #[test]
+    fn missing_toc_side_field_defaults_to_right() {
+        // 旧版本写出的 settings.json 没有 tocSide 字段
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), r#"{"layout":"tabs","toc":false}"#)
+            .unwrap();
+        let s = load(dir.path());
+        assert!(!s.toc);
+        assert_eq!(s.toc_side, TocSide::Right);
+    }
+
+    #[test]
+    fn toc_side_left_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Settings { layout: Layout::Tabs, toc: true, toc_side: TocSide::Left };
         save(dir.path(), &s);
         assert_eq!(load(dir.path()), s);
     }
