@@ -63,4 +63,26 @@ describe("App welcome placeholder", () => {
       tabs.removeTab(2, null);
     }
   });
+
+  it("scrolls the active tab into view when the active doc changes", async () => {
+    // tab 条溢出后横向滚动：从菜单/快捷键切到滚动区外的文档时，得把 active tab 拉回可见区
+    const tabs = await import("./tabs");
+    const scrolled: Element[] = [];
+    // jsdom 不实现 scrollIntoView，装一个只记录 this 的桩
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      tabs.addTab(1, "/x/a.md", "a.md");
+      tabs.addTab(2, "/x/b.md", "b.md"); // active = 2
+      const [tabA, tabB] = Array.from(container.querySelectorAll<HTMLElement>(".tab"));
+      expect(scrolled.at(-1)).toBe(tabB);
+      tabs.setActiveTab(1);
+      expect(scrolled.at(-1)).toBe(tabA);
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+      tabs.removeTab(1, 2);
+      tabs.removeTab(2, null);
+    }
+  });
 });
