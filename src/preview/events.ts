@@ -22,6 +22,7 @@ interface DocClosedPayload {
 
 export interface Settings {
   layout: "tabs" | "sideList";
+  toc: boolean;
 }
 
 function globalBanner(message: string): void {
@@ -36,8 +37,9 @@ function docBannerClear(docId: DocId): void {
   window.dispatchEvent(new CustomEvent("rsmd:doc-banner-clear", { detail: { docId } }));
 }
 
-function applyLayout(s: Settings): void {
+function applySettings(s: Settings): void {
   document.body.dataset.layout = s.layout === "sideList" ? "side-list" : "tabs";
+  document.body.dataset.toc = s.toc ? "on" : "off";
 }
 
 function installKeyboardShortcuts(): void {
@@ -84,7 +86,7 @@ export async function initTauriBridge(): Promise<void> {
     markTab(e.payload.docId);
   });
   await listen<Settings>("settings-changed", (e) => {
-    applyLayout(e.payload);
+    applySettings(e.payload);
   });
   await listen<string>("open-error", (e) => {
     globalBanner(e.payload);
@@ -98,6 +100,6 @@ export async function initTauriBridge(): Promise<void> {
   });
 
   installKeyboardShortcuts();
-  applyLayout(await invoke<Settings>("get_settings"));
+  applySettings(await invoke<Settings>("get_settings"));
   await invoke("frontend_ready");
 }

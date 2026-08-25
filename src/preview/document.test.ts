@@ -111,4 +111,44 @@ describe("document registry", () => {
     expect(doc.activeDocId()).toBe(2);
     expect(document.title).toBe("Two");
   });
+
+  it("builds a toc for headed docs and rebuilds it on update", async () => {
+    await doc.openDoc({
+      ...opened(1),
+      html: `<h1><a id="a"></a>A</h1><h2><a id="b"></a>B</h2>`,
+    });
+    const pane = host.querySelector<HTMLElement>('[data-doc-id="1"]')!;
+    expect(pane.querySelectorAll("nav.toc a").length).toBe(2);
+
+    await doc.updateDoc({
+      docId: 1,
+      html: `<h1><a id="a"></a>A</h1>`,
+      title: "T",
+    });
+    expect(pane.querySelectorAll("nav.toc").length).toBe(1);
+    expect(pane.querySelectorAll("nav.toc a").length).toBe(1);
+  });
+
+  it("creates no toc for docs without headings", async () => {
+    await doc.openDoc(opened(1)); // html 是 <p>doc 1</p>
+    const pane = host.querySelector<HTMLElement>('[data-doc-id="1"]')!;
+    expect(pane.querySelector("nav.toc")).toBeNull();
+  });
+
+  it("re-syncs the toc highlight when a background doc is shown again", async () => {
+    const headed = `<h1><a id="a"></a>A</h1><h2><a id="b"></a>B</h2>`;
+    await doc.openDoc({ ...opened(1), html: headed });
+    await doc.openDoc(opened(2)); // doc 1 转入后台（display:none）
+    await doc.updateDoc({ docId: 1, html: headed, title: "T1" }); // 后台热刷新：rect 全 0 → 末标题 b 被标 active
+    const pane1 = host.querySelector<HTMLElement>('[data-doc-id="1"]')!;
+    expect(pane1.querySelector("a.active")!.getAttribute("href")).toBe("#b");
+
+    // 模拟切回后的真实布局：a 在顶部附近、b 在下方
+    const tops = [10, 600];
+    Array.from(pane1.querySelectorAll<HTMLElement>(".markdown-body h1, .markdown-body h2")).forEach((h, i) => {
+      h.getBoundingClientRect = () => ({ top: tops[i] }) as DOMRect;
+    });
+    doc.applyFocus(1);
+    expect(pane1.querySelector("a.active")!.getAttribute("href")).toBe("#a");
+  });
 });

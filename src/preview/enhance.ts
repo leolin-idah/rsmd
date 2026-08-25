@@ -5,6 +5,24 @@ import { createHighlighter, type Highlighter } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import "katex/dist/katex.min.css";
 
+// 同步高亮串行执行，每块之间跨一次帧边界。并发块各自 setTimeout(0) 不够：
+// WebKit 会把同批到期的定时器合并在一次运行里、之间不绘制，页面会连续冻住数秒。
+// rAF 回调后浏览器必然绘制，再用一个宏任务把重活推到绘制之后。
+// 队列按文档（enhance 的 root）划分：一个大文档的积压不应拖住另一个刚打开的文档。
+// 窗口隐藏时 rAF 可能暂停、队列随之等待——没有调用方阻塞在 enhance() 的完成上，可接受。
+const highlightQueues = new WeakMap<HTMLElement, Promise<void>>();
+function afterNextPaint(): Promise<void> {
+  return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+function enqueueHighlight(root: HTMLElement, task: () => void): Promise<void> {
+  const run = (highlightQueues.get(root) ?? Promise.resolve()).then(async () => {
+    await afterNextPaint();
+    task();
+  });
+  highlightQueues.set(root, run.catch(() => {}));
+  return run;
+}
+
 let highlighterPromise: Promise<Highlighter> | null = null;
 function getHighlighter(): Promise<Highlighter> {
   highlighterPromise ??= createHighlighter({
@@ -40,6 +58,7 @@ function markError(el: HTMLElement, kind: string, err: unknown): void {
 }
 
 async function enhanceCodeBlock(
+  root: HTMLElement,
   pre: HTMLElement,
   code: HTMLElement,
   isCurrent: () => boolean
@@ -76,22 +95,25 @@ async function enhanceCodeBlock(
         return;
       }
     }
-    if (!isCurrent()) return;
-    const html = hl.codeToHtml(raw, {
-      lang,
-      themes: { light: "github-light", dark: "github-dark" },
-    });
-    const tmp = document.createElement("div");
-    tmp.innerHTML = html;
-    const shikiPre = tmp.firstElementChild as HTMLElement;
-    for (const attr of Array.from(shikiPre.attributes)) {
-      if (attr.name !== "data-raw" && attr.name !== "data-enhanced") {
-        pre.setAttribute(attr.name, attr.value);
+    // codeToHtml 是同步重活（JS 正则引擎，单块可达数百 ms）：排队、逐块占用主线程
+    await enqueueHighlight(root, () => {
+      if (!isCurrent()) return;
+      const html = hl.codeToHtml(raw, {
+        lang,
+        themes: { light: "github-light", dark: "github-dark" },
+      });
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      const shikiPre = tmp.firstElementChild as HTMLElement;
+      for (const attr of Array.from(shikiPre.attributes)) {
+        if (attr.name !== "data-raw" && attr.name !== "data-enhanced") {
+          pre.setAttribute(attr.name, attr.value);
+        }
       }
-    }
-    pre.innerHTML = shikiPre.innerHTML;
-    pre.dataset.enhanced = "shiki";
-    pre.dataset.raw = raw;
+      pre.innerHTML = shikiPre.innerHTML;
+      pre.dataset.enhanced = "shiki";
+      pre.dataset.raw = raw;
+    });
   } catch (err) {
     if (!isCurrent()) return;
     markError(pre, "highlight", err);
@@ -131,7 +153,7 @@ export async function enhance(
   )) {
     const pre = code.parentElement as HTMLElement;
     if (pre.dataset.enhanced !== undefined) continue;
-    jobs.push(enhanceCodeBlock(pre, code, isCurrent));
+    jobs.push(enhanceCodeBlock(root, pre, code, isCurrent));
   }
 
   for (const span of Array.from(

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { PreviewPane } from "./preview/PreviewPane";
 import { TabBar } from "./TabBar";
 import { getTabs, type DocId, type TabsState } from "./tabs";
@@ -31,7 +32,11 @@ export default function App() {
         return next;
       });
     };
-    const onTabs = (e: Event) => setTabsState((e as CustomEvent<TabsState>).detail);
+    // tabs 事件与 pane 的 DOM 插入发生在同一任务（events.ts）：必须同步提交，
+    // 否则欢迎语与正文会同显一帧，随后 shiki 的同步高亮会把这一帧冻住数百毫秒。
+    // 对所有 tabs 事件统一同步提交而不只针对 document-opened：渲染树很小，简单优先。
+    const onTabs = (e: Event) =>
+      flushSync(() => setTabsState((e as CustomEvent<TabsState>).detail));
     window.addEventListener("rsmd:banner", onBanner);
     window.addEventListener("rsmd:banner-clear", onBannerClear);
     window.addEventListener("rsmd:doc-banner", onDocBanner);

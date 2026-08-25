@@ -28,7 +28,8 @@ pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry
         })
         .collect();
     let active = *state.active.lock().unwrap();
-    let layout = state.settings.lock().unwrap().layout;
+    let settings = *state.settings.lock().unwrap();
+    let layout = settings.layout;
 
     let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "rsmd")
@@ -64,8 +65,13 @@ pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry
     let layout_side = CheckMenuItemBuilder::with_id("layout:sideList", "Side List")
         .checked(layout == Layout::SideList)
         .build(app)?;
+    let toc_item = CheckMenuItemBuilder::with_id("toggle-toc", "Table of Contents")
+        .accelerator("Alt+CmdOrCtrl+T")
+        .checked(settings.toc)
+        .build(app)?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&SubmenuBuilder::new(app, "Layout").item(&layout_tabs).item(&layout_side).build()?)
+        .item(&toc_item)
         .build()?;
 
     // ⌘W 必须走菜单（macOS 强语义 + 焦点不在 webview 时 keydown 收不到）；
@@ -121,6 +127,18 @@ fn set_layout(app: &AppHandle, layout: Layout) {
     let s = {
         let mut guard = state.settings.lock().unwrap();
         guard.layout = layout;
+        *guard
+    };
+    settings::save(&config_dir(app), &s);
+    let _ = app.emit("settings-changed", &s);
+    rebuild_menu(app);
+}
+
+fn toggle_toc(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let s = {
+        let mut guard = state.settings.lock().unwrap();
+        guard.toc = !guard.toc;
         *guard
     };
     settings::save(&config_dir(app), &s);
@@ -212,6 +230,7 @@ pub fn run() {
                 "prev-tab" => commands::cycle(app, -1),
                 "layout:tabs" => set_layout(app, Layout::Tabs),
                 "layout:sideList" => set_layout(app, Layout::SideList),
+                "toggle-toc" => toggle_toc(app),
                 _ => {
                     if let Some(idx) = id.strip_prefix("recent:")
                         && let Ok(i) = idx.parse::<usize>()

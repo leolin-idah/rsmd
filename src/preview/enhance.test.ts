@@ -124,4 +124,49 @@ describe("enhance", () => {
     expect(pre.dataset.enhanced).toBe("plain");
     expect(pre.textContent).toContain("x");
   });
+
+  it("defers each highlight to a later task so the browser can paint first", async () => {
+    const r = root(
+      '<pre><code class="language-rust">a()</code></pre>' +
+        '<pre><code class="language-rust">b()</code></pre>'
+    );
+    vi.useFakeTimers();
+    try {
+      const done = enhance(r);
+      // 只放行微任务：高亮器已就绪，但同步高亮不得在本任务内执行
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(r.querySelectorAll("pre[data-enhanced]").length).toBe(0);
+      await vi.runAllTimersAsync();
+      await done;
+      expect(r.querySelectorAll('pre[data-enhanced="shiki"]').length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("highlights each document independently of another document's backlog", async () => {
+    const a = root(
+      '<pre><code class="language-rust">a1()</code></pre>' +
+        '<pre><code class="language-rust">a2()</code></pre>' +
+        '<pre><code class="language-rust">a3()</code></pre>'
+    );
+    const b = root('<pre><code class="language-rust">b1()</code></pre>');
+    vi.useFakeTimers();
+    try {
+      const doneA = enhance(a);
+      const doneB = enhance(b);
+      // 放行微任务：高亮器就绪，各块进入队列等待帧边界（20 远大于实际需要的跳数）
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      vi.advanceTimersToNextFrame(); // 一次 rAF
+      await vi.advanceTimersByTimeAsync(1); // 其后的 setTimeout(0)
+      // 一帧之后：B 的块不应排在 A 的三块之后
+      expect(a.querySelectorAll('pre[data-enhanced="shiki"]').length).toBe(1);
+      expect(b.querySelectorAll('pre[data-enhanced="shiki"]').length).toBe(1);
+      await vi.runAllTimersAsync();
+      await Promise.all([doneA, doneB]);
+      expect(a.querySelectorAll('pre[data-enhanced="shiki"]').length).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

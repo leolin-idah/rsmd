@@ -1,5 +1,6 @@
 import { updatePreview } from "./dom";
 import { enhance } from "./enhance";
+import { installTocSpy, refreshToc, syncActive } from "./toc";
 import type { DocId } from "../tabs";
 
 export interface DocOpenedPayload {
@@ -52,6 +53,9 @@ function showPane(docId: DocId): void {
   }
   entry.pane.style.display = "";
   entry.pane.scrollTop = entry.scrollTop;
+  // 后台 pane（display:none）热刷新时 rect 全 0 → 末标题被标 active；恢复 scrollTop=0
+  // 不触发 scroll 事件，spy 无法补救，故显示时必须显式重同步高亮。
+  syncActive(entry.pane);
   activeId = docId;
   document.title = entry.title;
 }
@@ -69,6 +73,8 @@ export async function openDoc(doc: DocOpenedPayload): Promise<void> {
   registry.set(doc.docId, entry);
   showPane(doc.docId); // 新开即 active（Rust 侧同步设置）
   updatePreview(content, doc.html);
+  refreshToc(pane, content);
+  installTocSpy(pane);
   const gen = ++entry.generation;
   await enhance(content, () => registry.get(doc.docId) === entry && gen === entry.generation);
 }
@@ -82,6 +88,7 @@ export async function updateDoc(doc: DocUpdatedPayload): Promise<void> {
     document.title = doc.title;
   }
   updatePreview(entry.content, doc.html);
+  refreshToc(entry.pane, entry.content);
   const gen = ++entry.generation;
   // display:none 下热刷新安全：mermaid 用自身临时元素测量、KaTeX 纯 CSS、shiki 纯字符串
   await enhance(entry.content, () => registry.get(doc.docId) === entry && gen === entry.generation);
