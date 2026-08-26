@@ -72,14 +72,25 @@ body[data-layout="side-list"] #shell {
 
 /* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
 
+/* 胶囊式选中态：active 项是带圆角描边的浮起块，不再通顶/通栏。
+   这样 active 的白底不会与标题栏连成一片，也就不需要在 #shell 顶部再画分隔线；
+   tab 条与内容区之间的分界由淡阴影代替 1px 实线 */
 #tablist {
   display: flex;
   flex: none;
+  gap: 4px;
+  padding: 3px 6px;
+  /* side-list 的 width: 220px 要含 padding，否则加内边距后侧栏被撑宽 */
+  box-sizing: border-box;
   background: #f6f8fa;
   font-family: -apple-system, sans-serif;
   font-size: 12px;
   user-select: none;
   -webkit-user-select: none;
+  /* 阴影要压在相邻 pane 之上：.markdown-body 有自己的白底且 position: relative，
+     不抬 z-index 的话中间那段阴影会被它盖掉，只剩两侧露出来 */
+  position: relative;
+  z-index: 1;
   /* tab 条/侧栏是 chrome 而非内容区：系统「显示滚动条」设为始终时，横向那条会吃掉
      31px tab 条近一半高度，纵向那条会压缩侧栏文件名。隐藏的只是滚动条本身，
      触控板/滚轮滚动与 scrollIntoView 都照常工作 */
@@ -93,21 +104,27 @@ body[data-layout="side-list"] #shell {
 body[data-layout="tabs"] #tablist {
   flex-direction: row;
   overflow-x: auto;
-  border-bottom: 1px solid #d0d7de;
+  /* 两层：先一条不模糊的 1px hairline 把边界压实，再叠柔和阴影；都画在盒外，不占条高 */
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 body[data-layout="side-list"] #tablist {
   flex-direction: column;
   width: 220px;
+  padding: 6px;
   overflow-y: auto;
-  border-right: 1px solid #d0d7de;
+  box-shadow: 1px 0 0 rgba(0, 0, 0, 0.08), 1px 0 3px rgba(0, 0, 0, 0.08);
 }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  /* 上下 3(条) + 1(边) + 4(项) 两侧合计 16px + 行高 ≈ 原先 31px 的条高不变 */
+  padding: 4px 9px;
+  /* 透明描边占位，选中时只改颜色，宽高不抖 1px */
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: #57606a;
   cursor: default;
   white-space: nowrap;
@@ -117,15 +134,20 @@ body[data-layout="tabs"] .tab {
   flex: 1 1 0;
   /* 收缩下限：一次开很多文件时 tab 停在 120px 而非被均分到不可读，
      溢出的部分交给 #tablist 的 overflow-x 横向滚动。
-     border-box 让 120/200 就是实际可见宽度，不再被左右 padding 撑开 */
+     border-box 让 120/200 就是实际可见宽度，不再被 padding/描边撑开 */
   box-sizing: border-box;
   min-width: 120px;
   max-width: 200px;
-  border-right: 1px solid #d0d7de;
+}
+
+/* 去掉 tab 之间的竖线后，靠 hover 淡底提示可点；选中项已有白底描边，不再叠加 */
+.tab:not(.active):hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .tab.active {
   background: var(--bgColor-default, #fff);
+  border-color: #d0d7de;
   color: #1f2328;
 }
 
@@ -171,23 +193,25 @@ body[data-layout="tabs"] .tab {
   }
 
   body[data-layout="tabs"] #tablist {
-    border-bottom-color: #30363d;
+    /* 暗色下黑阴影落在 #0d1117 上几乎看不见，hairline 改用浅色 */
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.5);
   }
 
   body[data-layout="side-list"] #tablist {
-    border-right-color: #30363d;
-  }
-
-  body[data-layout="tabs"] .tab {
-    border-right-color: #30363d;
+    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.08), 1px 0 3px rgba(0, 0, 0, 0.5);
   }
 
   .tab {
     color: #8b949e;
   }
 
+  .tab:not(.active):hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
   .tab.active {
     background: var(--bgColor-default, #0d1117);
+    border-color: #30363d;
     color: #e6edf3;
   }
 
