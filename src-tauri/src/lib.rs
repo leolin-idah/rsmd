@@ -207,15 +207,19 @@ pub fn run() {
         // 必须是第一个 plugin：第二实例的 argv 转发到已有实例后立即退出
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             // 第二实例可能一次传多个文件；相对路径要基于其 cwd 解析，而非本实例的
-            for arg in argv.iter().skip(1) {
-                let p = PathBuf::from(arg);
-                let p = if p.is_relative() {
-                    std::path::Path::new(&cwd).join(p)
-                } else {
-                    p
-                };
-                commands::pending_or_open(app, p);
-            }
+            let paths: Vec<PathBuf> = argv
+                .iter()
+                .skip(1)
+                .map(|arg| {
+                    let p = PathBuf::from(arg);
+                    if p.is_relative() {
+                        std::path::Path::new(&cwd).join(p)
+                    } else {
+                        p
+                    }
+                })
+                .collect();
+            commands::pending_or_open(app, paths);
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
@@ -244,12 +248,13 @@ pub fn run() {
                         .file()
                         .add_filter("Markdown", &["md", "markdown", "mdown"])
                         .pick_files(move |files| {
-                            // 逐个 open-or-focus；最后一个成为 active（设计 §4）
-                            for f in files.into_iter().flatten() {
-                                if let Ok(p) = f.into_path() {
-                                    commands::open_or_report(&handle, p);
-                                }
-                            }
+                            // 整批 open-or-focus；首个成功的成为 active，其余后台待命（设计 §4）
+                            let paths: Vec<PathBuf> = files
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|f| f.into_path().ok())
+                                .collect();
+                            commands::open_batch(&handle, paths);
                         });
                 }
                 "install-cli" => install_cli(app),
@@ -278,7 +283,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::open_path,
+            commands::open_paths,
             commands::open_relative,
             commands::close_doc,
             commands::set_active_doc,
@@ -296,11 +301,8 @@ pub fn run() {
     app.run(|app_handle, event| {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = event {
-            for url in urls {
-                if let Ok(path) = url.to_file_path() {
-                    commands::pending_or_open(app_handle, path);
-                }
-            }
+            let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
+            commands::pending_or_open(app_handle, paths);
         }
     });
 }

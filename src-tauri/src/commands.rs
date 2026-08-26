@@ -32,6 +32,9 @@ pub struct DocOpenedPayload {
     pub html: String,
     pub title: String,
     pub base_dir: String,
+    // 批量打开只有首个成功的文档为 true：前端据此决定是否设 active 并立即渲染，
+    // 其余文档只建空壳、切到时再渲染
+    pub activate: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -167,15 +170,19 @@ fn on_file_event(app: &AppHandle, ev: FileEvent) {
     }
 }
 
-/// open-or-focus：已打开则聚焦已有 tab，否则新开并设为 active。
-pub fn open_document(app: &AppHandle, path: PathBuf) -> Result<(), String> {
+/// open-or-focus：已打开则聚焦已有 tab，否则新开。
+/// `activate=false`（批量打开的非首个文档）：新开的追加到列表末尾但不改 active、
+/// 不动原生标题；已打开的也不抢焦点。
+pub fn open_document(app: &AppHandle, path: PathBuf, activate: bool) -> Result<(), String> {
     let path = path.canonicalize().map_err(|e| format!("Cannot open: {e}"))?;
     let state = app.state::<AppState>();
 
     // 第一重检查：判重与插入必须同临界区（见下方第二重检查），读文件/render 不持锁
     let existing = find_doc(&state.docs.lock().unwrap(), &path);
     if let Some(id) = existing {
-        focus_doc(app, id);
+        if activate {
+            focus_doc(app, id);
+        }
         return Ok(());
     }
 
@@ -205,14 +212,18 @@ pub fn open_document(app: &AppHandle, path: PathBuf) -> Result<(), String> {
     };
     let doc_id = match inserted {
         Err(id) => {
-            focus_doc(app, id);
+            if activate {
+                focus_doc(app, id);
+            }
             return Ok(());
         }
         Ok(id) => id,
     };
 
-    *state.active.lock().unwrap() = Some(doc_id);
-    set_native_title(app, &rendered.title);
+    if activate {
+        *state.active.lock().unwrap() = Some(doc_id);
+        set_native_title(app, &rendered.title);
+    }
     let file_name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -226,6 +237,7 @@ pub fn open_document(app: &AppHandle, path: PathBuf) -> Result<(), String> {
             html: rendered.html,
             title: rendered.title,
             base_dir: rendered.base_dir,
+            activate,
         },
     );
     if watch_failed {
@@ -239,14 +251,30 @@ pub fn open_document(app: &AppHandle, path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开文档；失败时通过 `open-error` 事件把错误上报给前端错误层。
+/// 单个打开（菜单 Recent 等）并设为 active；失败时通过 `open-error` 事件上报前端。
 pub fn open_or_report(app: &AppHandle, path: PathBuf) {
-    if let Err(e) = open_document(app, path) {
+    if let Err(e) = open_document(app, path, true) {
         let _ = app.emit("open-error", e);
     }
 }
 
-pub fn pending_or_open(app: &AppHandle, path: PathBuf) {
+/// 批量打开（CLI 多参数、Finder 多选、⌘O 多选、拖放多文件）：
+/// 按给定顺序追加，**首个成功打开的**（含聚焦已存在 tab）设为 active，其余后台待命。
+/// 以"首个成功"而非"首个路径"为准：首个文件打不开时由下一个补位，
+/// 避免出现有 tab 却无 active 的空白态。单个失败经 `open-error` 上报，不中断其余。
+pub fn open_batch(app: &AppHandle, paths: Vec<PathBuf>) {
+    let mut activated = false;
+    for p in paths {
+        match open_document(app, p, !activated) {
+            Ok(()) => activated = true,
+            Err(e) => {
+                let _ = app.emit("open-error", e);
+            }
+        }
+    }
+}
+
+pub fn pending_or_open(app: &AppHandle, paths: Vec<PathBuf>) {
     let state = app.state::<AppState>();
     // 与 frontend_ready 在 `initial` 锁上串行化：ready 的读取必须发生在锁内，
     // 否则 ready 置位 + initial 排空可能插在 check 与 act 之间，导致本次打开被丢弃。
@@ -254,14 +282,14 @@ pub fn pending_or_open(app: &AppHandle, path: PathBuf) {
     let to_open = {
         let mut initial = state.initial.lock().unwrap();
         if state.ready.load(Ordering::SeqCst) {
-            Some(path)
+            Some(paths)
         } else {
-            initial.push(path);
+            initial.extend(paths); // ready 前到达的多批合并为一批，首个成功的为 active
             None
         }
     };
-    if let Some(p) = to_open {
-        open_or_report(app, p);
+    if let Some(ps) = to_open {
+        open_batch(app, ps);
     }
 }
 
@@ -283,9 +311,10 @@ pub fn cycle(app: &AppHandle, offset: i64) {
     }
 }
 
+/// 拖放入口：整批一次提交。失败经 `open-error` 事件上报，命令本身不返回错误。
 #[tauri::command]
-pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {
-    open_document(&app, PathBuf::from(path))
+pub fn open_paths(app: AppHandle, paths: Vec<String>) {
+    open_batch(&app, paths.into_iter().map(PathBuf::from).collect());
 }
 
 #[tauri::command]
@@ -303,7 +332,7 @@ pub fn open_relative(
             .and_then(|d| d.path.parent().map(Path::to_path_buf))
     }
     .ok_or_else(|| "Source document is no longer open".to_string())?;
-    open_document(&app, base.join(href))
+    open_document(&app, base.join(href), true)
 }
 
 #[tauri::command]
@@ -356,10 +385,8 @@ pub fn frontend_ready(app: AppHandle, state: State<AppState>) -> Result<(), Stri
         state.ready.store(true, Ordering::SeqCst);
         std::mem::take(&mut *guard)
     };
-    for p in initial {
-        // 启动路径打开失败也要经 open-error 事件上报（前端弹横幅），而不是吞进 invoke 错误
-        open_or_report(&app, p);
-    }
+    // 启动路径打开失败也要经 open-error 事件上报（前端弹横幅），而不是吞进 invoke 错误
+    open_batch(&app, initial);
     Ok(())
 }
 

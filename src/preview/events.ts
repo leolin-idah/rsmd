@@ -59,8 +59,8 @@ export async function initTauriBridge(): Promise<void> {
   await listen<DocOpenedPayload>("document-opened", (e) => {
     // 同步清全局横幅（open-error）：必须早于 enhance（异步）
     window.dispatchEvent(new CustomEvent("rsmd:banner-clear"));
-    addTab(e.payload.docId, e.payload.path, e.payload.fileName);
-    void openDoc(e.payload);
+    addTab(e.payload.docId, e.payload.path, e.payload.fileName, e.payload.activate);
+    openDoc(e.payload);
   });
   await listen<DocUpdatedPayload>("document-updated", (e) => {
     // 该 doc 的横幅与异常标记清除（文件恢复后 watcher 继续触发 Modified）
@@ -95,9 +95,11 @@ export async function initTauriBridge(): Promise<void> {
   });
   await getCurrentWebview().onDragDropEvent((e) => {
     if (e.payload.type === "drop") {
-      for (const path of e.payload.paths) {
-        invoke("open_path", { path }).catch((err) => globalBanner(String(err)));
-      }
+      // 整批一次提交：Rust 只把首个成功的设为 active，其余后台待命；
+      // 单文件失败经 open-error 事件上报，不中断其余文件
+      void invoke("open_paths", { paths: e.payload.paths }).catch((err) =>
+        globalBanner(String(err))
+      );
     }
   });
 

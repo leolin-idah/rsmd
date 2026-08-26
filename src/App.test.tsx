@@ -49,8 +49,8 @@ describe("App welcome placeholder", () => {
     const tabs = await import("./tabs");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      tabs.addTab(1, "/x/a.md", "a.md");
-      tabs.addTab(2, "/x/b.md", "b.md"); // active = 2
+      tabs.addTab(1, "/x/a.md", "a.md", true);
+      tabs.addTab(2, "/x/b.md", "b.md", true); // active = 2
       const [tabA, tabB] = Array.from(container.querySelectorAll<HTMLElement>(".tab"));
       expect(tabB.classList.contains("active")).toBe(true);
       tabA.click();
@@ -73,8 +73,8 @@ describe("App welcome placeholder", () => {
       scrolled.push(this);
     };
     try {
-      tabs.addTab(1, "/x/a.md", "a.md");
-      tabs.addTab(2, "/x/b.md", "b.md"); // active = 2
+      tabs.addTab(1, "/x/a.md", "a.md", true);
+      tabs.addTab(2, "/x/b.md", "b.md", true); // active = 2
       const [tabA, tabB] = Array.from(container.querySelectorAll<HTMLElement>(".tab"));
       expect(scrolled.at(-1)).toBe(tabB);
       tabs.setActiveTab(1);

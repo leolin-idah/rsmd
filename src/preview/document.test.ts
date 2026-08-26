@@ -20,7 +20,13 @@ function opened(docId: number, title = `Title ${docId}`) {
     html: `<p>doc ${docId}</p>`,
     title,
     baseDir: "/docs",
+    activate: true,
   };
+}
+
+/// 批量打开里的非首个文档：Rust 不设 active，前端只建空壳、不渲染
+function background(docId: number, title = `Title ${docId}`) {
+  return { ...opened(docId, title), activate: false };
 }
 
 describe("document registry", () => {
@@ -150,5 +156,88 @@ describe("document registry", () => {
     });
     doc.applyFocus(1);
     expect(pane1.querySelector("a.active")!.getAttribute("href")).toBe("#a");
+  });
+  describe("background open (lazy materialization)", () => {
+    it("does not render, enhance, or retitle a background doc", async () => {
+      await doc.openDoc(opened(1, "One"));
+      enhanceMock.mockClear();
+      await doc.openDoc(background(2, "Two"));
+
+      expect(doc.activeDocId()).toBe(1);
+      expect(document.title).toBe("One");
+      const pane2 = host.querySelector<HTMLElement>('[data-doc-id="2"]')!;
+      expect(pane2.style.display).toBe("none");
+      expect(pane2.querySelector(".markdown-body")!.innerHTML).toBe("");
+      expect(enhanceMock).not.toHaveBeenCalled();
+    });
+
+    it("materializes a background doc on first focus", async () => {
+      await doc.openDoc(opened(1, "One"));
+      await doc.openDoc({
+        ...background(2, "Two"),
+        html: `<h1><a id="a"></a>A</h1><p>doc 2</p>`,
+      });
+      enhanceMock.mockClear();
+
+      doc.applyFocus(2);
+
+      const pane2 = host.querySelector<HTMLElement>('[data-doc-id="2"]')!;
+      expect(pane2.style.display).toBe("");
+      expect(pane2.querySelector(".markdown-body")!.innerHTML).toContain("doc 2");
+      expect(pane2.querySelectorAll("nav.toc a").length).toBe(1);
+      expect(document.title).toBe("Two");
+      expect(enhanceMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("materializes only once: refocusing does not re-render", async () => {
+      await doc.openDoc(opened(1));
+      await doc.openDoc(background(2));
+      doc.applyFocus(2);
+      enhanceMock.mockClear();
+
+      doc.applyFocus(1);
+      doc.applyFocus(2);
+      expect(enhanceMock).not.toHaveBeenCalled();
+    });
+
+    it("hot-reload of a pending doc only updates the stored payload", async () => {
+      await doc.openDoc(opened(1, "One"));
+      await doc.openDoc(background(2, "Two"));
+      enhanceMock.mockClear();
+
+      await doc.updateDoc({ docId: 2, html: "<p>fresh</p>", title: "Two!" });
+
+      const pane2 = host.querySelector<HTMLElement>('[data-doc-id="2"]')!;
+      expect(pane2.querySelector(".markdown-body")!.innerHTML).toBe(""); // 仍未物化
+      expect(enhanceMock).not.toHaveBeenCalled();
+      expect(document.title).toBe("One");
+
+      doc.applyFocus(2);
+      expect(pane2.querySelector(".markdown-body")!.innerHTML).toBe("<p>fresh</p>");
+      expect(document.title).toBe("Two!");
+    });
+
+    it("closing a pending doc removes its pane without touching the active one", async () => {
+      await doc.openDoc(opened(1, "One"));
+      await doc.openDoc(background(2));
+      doc.closeDoc(2, 1);
+      expect(host.querySelector('[data-doc-id="2"]')).toBeNull();
+      expect(doc.activeDocId()).toBe(1);
+      expect(document.title).toBe("One");
+    });
+
+    it("a background doc becomes visible when it is the nextActive after close", async () => {
+      await doc.openDoc(opened(1, "One"));
+      await doc.openDoc(background(2, "Two"));
+      enhanceMock.mockClear();
+
+      doc.closeDoc(1, 2);
+
+      const pane2 = host.querySelector<HTMLElement>('[data-doc-id="2"]')!;
+      expect(pane2.style.display).toBe("");
+      expect(pane2.querySelector(".markdown-body")!.innerHTML).toContain("doc 2");
+      expect(document.title).toBe("Two");
+      expect(enhanceMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

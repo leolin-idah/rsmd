@@ -59,11 +59,14 @@ export function getTabs(): TabsState {
   return { tabs: tabs.map((t) => ({ ...t })), active };
 }
 
-export function addTab(docId: DocId, path: string, fileName: string): void {
+/// activate=false：批量打开中的后台文档，追加到列表但不改 active（镜像 Rust）。
+export function addTab(docId: DocId, path: string, fileName: string, activate: boolean): void {
   if (!tabs.some((t) => t.docId === docId)) {
     tabs.push({ docId, path, fileName, label: fileName, marked: false });
   }
-  active = docId;
+  if (activate) {
+    active = docId;
+  }
   emitChange();
 }
 

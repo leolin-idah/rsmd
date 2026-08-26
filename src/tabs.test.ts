@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { disambiguate } from "./tabs";
+
+type Tabs = typeof import("./tabs");
 
 describe("disambiguate", () => {
   it("uses bare file names when unique", () => {
@@ -30,5 +32,28 @@ describe("disambiguate", () => {
       "readme.md",
       "a/readme.md",
     ]);
+  });
+});
+
+describe("addTab", () => {
+  let tabs: Tabs;
+
+  beforeEach(async () => {
+    vi.resetModules(); // 清空模块级 tabs / active
+    tabs = await import("./tabs");
+  });
+
+  it("activates the tab when opened with activate=true", () => {
+    tabs.addTab(1, "/x/a.md", "a.md", true);
+    tabs.addTab(2, "/x/b.md", "b.md", true);
+    expect(tabs.getTabs().active).toBe(2);
+  });
+
+  it("keeps the current active when a background tab is added", () => {
+    tabs.addTab(1, "/x/a.md", "a.md", true);
+    tabs.addTab(2, "/x/b.md", "b.md", false);
+    const state = tabs.getTabs();
+    expect(state.tabs.map((t) => t.docId)).toEqual([1, 2]); // 仍按打开顺序追加
+    expect(state.active).toBe(1);
   });
 });
