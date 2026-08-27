@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn(async (..._a: unknown[]) => {});
-const openUrl = vi.fn(async (..._a: unknown[]) => {});
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...a: unknown[]) => openUrl(...a) }));
+const ipc = vi.hoisted(() => ({
+  openRelative: vi.fn(async (_docId: number, _href: string) => {}),
+  openExternal: vi.fn(async (_url: string) => {}),
+}));
+vi.mock("../ipc", () => ipc);
 
 import { installLinkHandler } from "./links";
+import { useShellStore } from "../store";
 
 function addPane(host: HTMLElement, docId: number, inner = ""): HTMLElement {
   const pane = document.createElement("div");
@@ -30,6 +32,7 @@ describe("installLinkHandler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useShellStore.setState({ error: null });
     document.body.innerHTML = "";
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -39,18 +42,26 @@ describe("installLinkHandler", () => {
 
   it("opens http(s) links in system browser", () => {
     click(pane, "https://example.com");
-    expect(openUrl).toHaveBeenCalledWith("https://example.com");
-    expect(invoke).not.toHaveBeenCalled();
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com");
+    expect(ipc.openRelative).not.toHaveBeenCalled();
   });
 
   it("opens relative markdown links via backend with the pane's docId", () => {
     click(pane, "./other.md");
-    expect(invoke).toHaveBeenCalledWith("open_relative", { docId: 7, href: "./other.md" });
+    expect(ipc.openRelative).toHaveBeenCalledWith(7, "./other.md");
   });
 
   it("strips the fragment from markdown links before invoking", () => {
     click(pane, "./other.md#intro");
-    expect(invoke).toHaveBeenCalledWith("open_relative", { docId: 7, href: "./other.md" });
+    expect(ipc.openRelative).toHaveBeenCalledWith(7, "./other.md");
+  });
+
+  it("reports a failed relative open as the global error banner", async () => {
+    ipc.openRelative.mockRejectedValueOnce("Cannot open: missing.md");
+    click(pane, "./missing.md");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useShellStore.getState().error).toBe("Cannot open: missing.md");
   });
 
   it("resolves anchors inside the clicked pane only (跨文档同名 id)", () => {
@@ -72,12 +83,12 @@ describe("installLinkHandler", () => {
     stray.addEventListener("click", (e) => e.preventDefault());
     host.appendChild(stray);
     stray.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(invoke).not.toHaveBeenCalled();
+    expect(ipc.openRelative).not.toHaveBeenCalled();
   });
 
   it("is idempotent per host (StrictMode double-mount)", () => {
     installLinkHandler(host);
     click(pane, "https://example.com");
-    expect(openUrl).toHaveBeenCalledTimes(1);
+    expect(ipc.openExternal).toHaveBeenCalledTimes(1);
   });
 });

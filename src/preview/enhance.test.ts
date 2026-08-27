@@ -29,8 +29,8 @@ vi.mock("katex", () => ({
     }),
   },
 }));
-vi.mock("@tauri-apps/api/core", () => ({
-  convertFileSrc: (p: string) => `asset://localhost${p}`,
+vi.mock("../ipc", () => ({
+  assetUrl: (p: string) => `asset://localhost${p}`,
 }));
 
 import { enhance } from "./enhance";

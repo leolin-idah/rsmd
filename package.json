@@ -20,7 +20,8 @@
     "morphdom": "^2.7",
     "react": "^19",
     "react-dom": "^19",
-    "shiki": "^3"
+    "shiki": "^3",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

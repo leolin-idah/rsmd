@@ -1,9 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import * as ipc from "../ipc";
+import { useShellStore } from "../store";
 
-function banner(message: string): void {
-  window.dispatchEvent(new CustomEvent("rsmd:banner", { detail: message }));
-}
+const reportError = (err: unknown) => useShellStore.getState().setError(String(err));
 
 // StrictMode 下 effect 会双跑：同一宿主只挂一次监听
 const installed = new WeakSet<HTMLElement>();
@@ -21,16 +19,13 @@ export function installLinkHandler(host: HTMLElement): void {
 
     if (/^https?:/i.test(href)) {
       e.preventDefault();
-      void openUrl(href).catch((err) => banner(String(err)));
+      void ipc.openExternal(href).catch(reportError);
     } else if (/\.(md|markdown|mdown)$/i.test(href.split("#")[0])) {
       e.preventDefault();
       const docId = Number(pane.dataset.docId);
       if (!Number.isFinite(docId)) return;
       // 去掉 fragment（./other.md#intro）并解码百分号转义，否则后端按整串找文件
-      void invoke("open_relative", {
-        docId,
-        href: decodeURIComponent(href.split("#")[0]),
-      }).catch((err) => banner(String(err)));
+      void ipc.openRelative(docId, decodeURIComponent(href.split("#")[0])).catch(reportError);
     } else if (href.startsWith("#")) {
       e.preventDefault();
       // 锚点必须限定在当前 pane 内查找：comrak 生成的标题 id 极易跨文档重名，

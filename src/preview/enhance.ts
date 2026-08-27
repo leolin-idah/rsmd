@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { assetUrl } from "../ipc";
 import katex from "katex";
 import mermaid from "mermaid";
 import { createHighlighter, type Highlighter } from "shiki";
@@ -138,7 +138,7 @@ function enhanceImage(img: HTMLImageElement): void {
   const src = img.getAttribute("src");
   if (!src || !src.startsWith("/")) return;
   img.dataset.raw = src;
-  img.setAttribute("src", convertFileSrc(src));
+  img.setAttribute("src", assetUrl(src));
   img.dataset.enhanced = "img";
 }
 

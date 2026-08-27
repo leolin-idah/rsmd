@@ -1,206 +1,22 @@
+//! 组合根：装配插件与状态、注册命令、把原生菜单/系统事件分发到 session / shell。
+//! 依赖方向：lib → {shell, menu, commands} → session → {ipc, render, watcher, settings, recent}。
+
 pub mod cli_install;
 pub mod commands;
+pub mod ipc;
+pub mod menu;
 pub mod recent;
 pub mod render;
+pub mod session;
 pub mod settings;
+pub mod shell;
 pub mod watcher;
 
-use commands::AppState;
+use session::AppState;
 use settings::{Layout, TocSide};
-use std::path::{Path, PathBuf};
-use tauri::menu::{
-    CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
-};
-use tauri::{AppHandle, Emitter, Manager, Wry};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-
-pub fn build_menu(app: &AppHandle, recent: &[PathBuf]) -> tauri::Result<Menu<Wry>> {
-    let state = app.state::<AppState>();
-    let docs: Vec<(u64, String)> = state
-        .docs
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|d| {
-            let name = d.path.file_name().map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| d.path.to_string_lossy().into_owned());
-            (d.id, name)
-        })
-        .collect();
-    let active = *state.active.lock().unwrap();
-    let settings = *state.settings.lock().unwrap();
-    let layout = settings.layout;
-    let toc_side = settings.toc_side;
-
-    let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
-    let app_menu = SubmenuBuilder::new(app, "rsmd")
-        .item(&install_cli)
-        .separator()
-        .item(&PredefinedMenuItem::quit(app, None)?)
-        .build()?;
-    // macOS WKWebView 的 ⌘C/⌘A 需要菜单路由，否则快捷键不生效
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .item(&PredefinedMenuItem::copy(app, None)?)
-        .item(&PredefinedMenuItem::select_all(app, None)?)
-        .build()?;
-
-    let open = MenuItemBuilder::with_id("open", "Open…")
-        .accelerator("CmdOrCtrl+O")
-        .build(app)?;
-    let mut recent_menu = SubmenuBuilder::new(app, "Open Recent");
-    for (i, p) in recent.iter().enumerate() {
-        let label = p.file_name().map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| p.to_string_lossy().into_owned());
-        recent_menu = recent_menu.item(
-            &MenuItemBuilder::with_id(format!("recent:{i}"), label).build(app)?,
-        );
-    }
-    let file_menu = SubmenuBuilder::new(app, "File")
-        .item(&open)
-        .item(&recent_menu.build()?)
-        .build()?;
-
-    let layout_tabs = CheckMenuItemBuilder::with_id("layout:tabs", "Tabs")
-        .checked(layout == Layout::Tabs)
-        .build(app)?;
-    let layout_side = CheckMenuItemBuilder::with_id("layout:sideList", "Side List")
-        .checked(layout == Layout::SideList)
-        .build(app)?;
-    let toc_show = CheckMenuItemBuilder::with_id("toggle-toc", "Show")
-        .accelerator("Alt+CmdOrCtrl+T")
-        .checked(settings.toc)
-        .build(app)?;
-    // TOC 隐藏时位置无从谈起，置灰而非默默失效
-    let toc_left = CheckMenuItemBuilder::with_id("toc-side:left", "Left")
-        .checked(toc_side == TocSide::Left)
-        .enabled(settings.toc)
-        .build(app)?;
-    let toc_right = CheckMenuItemBuilder::with_id("toc-side:right", "Right")
-        .checked(toc_side == TocSide::Right)
-        .enabled(settings.toc)
-        .build(app)?;
-    let toc_menu = SubmenuBuilder::new(app, "Table of Contents")
-        .item(&toc_show)
-        .separator()
-        .item(&toc_left)
-        .item(&toc_right)
-        .build()?;
-    let view_menu = SubmenuBuilder::new(app, "View")
-        .item(&SubmenuBuilder::new(app, "Layout").item(&layout_tabs).item(&layout_side).build()?)
-        .item(&toc_menu)
-        .build()?;
-
-    // ⌘W 必须走菜单（macOS 强语义 + 焦点不在 webview 时 keydown 收不到）；
-    // 无 tab 时 disable，避免误触系统默认行为
-    let close_tab = MenuItemBuilder::with_id("close-tab", "Close Tab")
-        .accelerator("CmdOrCtrl+W")
-        .enabled(!docs.is_empty())
-        .build(app)?;
-    let next_tab = MenuItemBuilder::with_id("next-tab", "Next Tab")
-        .accelerator("CmdOrCtrl+Shift+]")
-        .enabled(!docs.is_empty())
-        .build(app)?;
-    let prev_tab = MenuItemBuilder::with_id("prev-tab", "Previous Tab")
-        .accelerator("CmdOrCtrl+Shift+[")
-        .enabled(!docs.is_empty())
-        .build(app)?;
-    let mut window_menu = SubmenuBuilder::new(app, "Window")
-        .item(&close_tab)
-        .separator()
-        .item(&next_tab)
-        .item(&prev_tab);
-    if !docs.is_empty() {
-        window_menu = window_menu.separator();
-    }
-    let n = docs.len();
-    for (i, (id, name)) in docs.iter().enumerate() {
-        let mut item = CheckMenuItemBuilder::with_id(format!("doc:{id}"), name)
-            .checked(Some(*id) == active);
-        // 前 8 个依次 ⌘1~8；⌘9 固定最后一个（浏览器惯例）；其余无快捷键但仍列出
-        if i < 8 {
-            item = item.accelerator(format!("CmdOrCtrl+{}", i + 1));
-        } else if i == n - 1 {
-            item = item.accelerator("CmdOrCtrl+9");
-        }
-        window_menu = window_menu.item(&item.build(app)?);
-    }
-
-    MenuBuilder::new(app)
-        .items(&[&app_menu, &edit_menu, &file_menu, &view_menu, &window_menu.build()?])
-        .build()
-}
-
-/// open / close / set_active / layout 切换后统一重建菜单（勾选态与 enable 态）。
-pub fn rebuild_menu(app: &AppHandle) {
-    let recent = recent::load(&config_dir(app));
-    if let Ok(menu) = build_menu(app, &recent) {
-        let _ = app.set_menu(menu);
-    }
-}
-
-fn set_layout(app: &AppHandle, layout: Layout) {
-    let state = app.state::<AppState>();
-    let s = {
-        let mut guard = state.settings.lock().unwrap();
-        guard.layout = layout;
-        *guard
-    };
-    settings::save(&config_dir(app), &s);
-    let _ = app.emit("settings-changed", &s);
-    rebuild_menu(app);
-}
-
-fn toggle_toc(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let s = {
-        let mut guard = state.settings.lock().unwrap();
-        guard.toc = !guard.toc;
-        *guard
-    };
-    settings::save(&config_dir(app), &s);
-    let _ = app.emit("settings-changed", &s);
-    rebuild_menu(app);
-}
-
-fn set_toc_side(app: &AppHandle, side: TocSide) {
-    let state = app.state::<AppState>();
-    let s = {
-        let mut guard = state.settings.lock().unwrap();
-        guard.toc_side = side;
-        *guard
-    };
-    settings::save(&config_dir(app), &s);
-    let _ = app.emit("settings-changed", &s);
-    rebuild_menu(app);
-}
-
-fn config_dir(app: &AppHandle) -> std::path::PathBuf {
-    app.path().app_config_dir().expect("config dir must resolve")
-}
-
-/// Install 'md' Command 菜单项：把启动脚本写入 ~/.local/bin，结果弹窗反馈。
-/// `tauri dev` 跑裸二进制时找不到 .app，脚本退化为仅按 bundle id 解析。
-fn install_cli(app: &AppHandle) {
-    let bundle = std::env::current_exe().ok().and_then(|exe| {
-        exe.ancestors()
-            .find(|p| p.extension().is_some_and(|e| e == "app"))
-            .map(Path::to_path_buf)
-    });
-    let result = app.path().home_dir().map_err(|e| e.to_string()).and_then(|home| {
-        cli_install::install(&home.join(".local/bin"), bundle.as_deref(), &app.config().identifier)
-    });
-    let (kind, msg) = match result {
-        Ok(target) => (
-            MessageDialogKind::Info,
-            format!(
-                "Installed {}.\nMake sure ~/.local/bin is on your PATH.",
-                target.display()
-            ),
-        ),
-        Err(e) => (MessageDialogKind::Error, e),
-    };
-    app.dialog().message(msg).title("Install 'md' Command").kind(kind).show(|_| {});
-}
+use std::path::PathBuf;
+use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -219,7 +35,7 @@ pub fn run() {
                     }
                 })
                 .collect();
-            commands::pending_or_open(app, paths);
+            session::pending_or_open(app, paths);
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
@@ -228,14 +44,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
+            let handle = app.handle();
             // settings 先于菜单构建装载：build_menu 读取 Layout 勾选态
             *app.state::<AppState>().settings.lock().unwrap() =
-                settings::load(&config_dir(app.handle()));
+                settings::load(&shell::config_dir(handle));
             // CLI 入口：rsmd <file...>；frontend_ready 握手后才真正打开，
             // 避免事件早于前端监听器注册（spec §4）
             let args: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
             app.state::<AppState>().initial.lock().unwrap().extend(args);
-            let menu = build_menu(app.handle(), &recent::load(&config_dir(app.handle())))?;
+            let recent = recent::load(&shell::config_dir(handle));
+            let menu = menu::build_menu(handle, &app.state::<AppState>(), &recent)?;
             app.set_menu(menu)?;
             Ok(())
         })
@@ -254,30 +72,30 @@ pub fn run() {
                                 .flatten()
                                 .filter_map(|f| f.into_path().ok())
                                 .collect();
-                            commands::open_batch(&handle, paths);
+                            session::open_batch(&handle, paths);
                         });
                 }
-                "install-cli" => install_cli(app),
-                "close-tab" => commands::close_active(app),
-                "next-tab" => commands::cycle(app, 1),
-                "prev-tab" => commands::cycle(app, -1),
-                "layout:tabs" => set_layout(app, Layout::Tabs),
-                "layout:sideList" => set_layout(app, Layout::SideList),
-                "toggle-toc" => toggle_toc(app),
-                "toc-side:left" => set_toc_side(app, TocSide::Left),
-                "toc-side:right" => set_toc_side(app, TocSide::Right),
+                "install-cli" => shell::install_cli(app),
+                "close-tab" => session::close_active(app),
+                "next-tab" => session::cycle(app, 1),
+                "prev-tab" => session::cycle(app, -1),
+                "layout:tabs" => shell::update_settings(app, |s| s.layout = Layout::Tabs),
+                "layout:sideList" => shell::update_settings(app, |s| s.layout = Layout::SideList),
+                "toggle-toc" => shell::update_settings(app, |s| s.toc = !s.toc),
+                "toc-side:left" => shell::update_settings(app, |s| s.toc_side = TocSide::Left),
+                "toc-side:right" => shell::update_settings(app, |s| s.toc_side = TocSide::Right),
                 _ => {
                     if let Some(idx) = id.strip_prefix("recent:")
                         && let Ok(i) = idx.parse::<usize>()
                     {
-                        let list = recent::load(&config_dir(app));
+                        let list = recent::load(&shell::config_dir(app));
                         if let Some(p) = list.get(i) {
-                            commands::open_or_report(app, p.clone());
+                            session::open_or_report(app, p.clone());
                         }
                     } else if let Some(raw) = id.strip_prefix("doc:")
                         && let Ok(doc_id) = raw.parse::<u64>()
                     {
-                        commands::focus_doc(app, doc_id);
+                        session::focus_doc(app, doc_id);
                     }
                 }
             }
@@ -302,7 +120,7 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = event {
             let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
-            commands::pending_or_open(app_handle, paths);
+            session::pending_or_open(app_handle, paths);
         }
     });
 }

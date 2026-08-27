@@ -30,7 +30,7 @@ body[data-layout="tabs"] #shell {
   flex-direction: column;
 }
 
-body[data-layout="side-list"] #shell {
+body[data-layout="sideList"] #shell {
   flex-direction: row;
 }
 
@@ -108,7 +108,7 @@ body[data-layout="tabs"] #tablist {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-body[data-layout="side-list"] #tablist {
+body[data-layout="sideList"] #tablist {
   flex-direction: column;
   width: 220px;
   padding: 6px;
@@ -197,7 +197,7 @@ body[data-layout="tabs"] .tab {
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.5);
   }
 
-  body[data-layout="side-list"] #tablist {
+  body[data-layout="sideList"] #tablist {
     box-shadow: 1px 0 0 rgba(255, 255, 255, 0.08), 1px 0 3px rgba(0, 0, 0, 0.5);
   }
 

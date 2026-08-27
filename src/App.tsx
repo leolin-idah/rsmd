@@ -1,64 +1,17 @@
-import { useEffect, useState } from "react";
-import { flushSync } from "react-dom";
 import { PreviewPane } from "./preview/PreviewPane";
 import { TabBar } from "./TabBar";
-import { getTabs, type DocId, type TabsState } from "./tabs";
+import { selectBanner, useShellStore } from "./store";
 
-interface DocBannerDetail {
-  docId: DocId;
-  message: string;
-}
-
+// 外壳只订阅 store 的原子切片（布尔 / 字符串），任何 tab 变化都不会重渲 PreviewPane。
+// store 更新经 useSyncExternalStore 以同步优先级提交（同一任务的微任务内、下一次绘制前），
+// 因此 events.ts 在同一任务里插入正文 DOM 时，欢迎语不会与正文同显一帧。
 export default function App() {
-  const [globalBanner, setGlobalBanner] = useState<string | null>(null);
-  // 横幅 per-doc：只渲染 active doc 的那一条；open-error 保持全局
-  const [docBanners, setDocBanners] = useState<ReadonlyMap<DocId, string>>(new Map());
-  // 初值直读 store：事件桥可能在本组件挂载前就收到首个 document-opened
-  const [tabsState, setTabsState] = useState<TabsState>(getTabs);
-
-  useEffect(() => {
-    const onBanner = (e: Event) => setGlobalBanner((e as CustomEvent<string>).detail);
-    const onBannerClear = () => setGlobalBanner(null);
-    const onDocBanner = (e: Event) => {
-      const d = (e as CustomEvent<DocBannerDetail>).detail;
-      setDocBanners((prev) => new Map(prev).set(d.docId, d.message));
-    };
-    const onDocBannerClear = (e: Event) => {
-      const d = (e as CustomEvent<{ docId: DocId }>).detail;
-      setDocBanners((prev) => {
-        if (!prev.has(d.docId)) return prev;
-        const next = new Map(prev);
-        next.delete(d.docId);
-        return next;
-      });
-    };
-    // tabs 事件与 pane 的 DOM 插入发生在同一任务（events.ts）：必须同步提交，
-    // 否则欢迎语与正文会同显一帧，随后 shiki 的同步高亮会把这一帧冻住数百毫秒。
-    // 对所有 tabs 事件统一同步提交而不只针对 document-opened：渲染树很小，简单优先。
-    const onTabs = (e: Event) =>
-      flushSync(() => setTabsState((e as CustomEvent<TabsState>).detail));
-    window.addEventListener("rsmd:banner", onBanner);
-    window.addEventListener("rsmd:banner-clear", onBannerClear);
-    window.addEventListener("rsmd:doc-banner", onDocBanner);
-    window.addEventListener("rsmd:doc-banner-clear", onDocBannerClear);
-    window.addEventListener("rsmd:tabs", onTabs);
-    return () => {
-      window.removeEventListener("rsmd:banner", onBanner);
-      window.removeEventListener("rsmd:banner-clear", onBannerClear);
-      window.removeEventListener("rsmd:doc-banner", onDocBanner);
-      window.removeEventListener("rsmd:doc-banner-clear", onDocBannerClear);
-      window.removeEventListener("rsmd:tabs", onTabs);
-    };
-  }, []);
-
-  const hasDoc = tabsState.tabs.length > 0;
-  const banner =
-    globalBanner ??
-    (tabsState.active !== null ? (docBanners.get(tabsState.active) ?? null) : null);
+  const hasDoc = useShellStore((s) => s.tabs.length > 0);
+  const banner = useShellStore(selectBanner);
 
   return (
     <div id="shell">
-      {hasDoc && <TabBar tabs={tabsState.tabs} active={tabsState.active} />}
+      {hasDoc && <TabBar />}
       <div id="main">
         {banner && <div className="banner">{banner}</div>}
         {!hasDoc && (

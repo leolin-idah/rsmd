@@ -19,8 +19,7 @@ export function updatePreview(container: HTMLElement, html: string): void {
       if (from.dataset?.enhanced !== undefined && from.dataset.raw === rawOf(toEl)) {
         return false;
       }
-      if (fromEl.isEqualNode(toEl)) return false;
-      return true;
+      return !fromEl.isEqualNode(toEl);
     },
   });
 }
