@@ -26,6 +26,14 @@ pub fn build_menu(
         })
         .collect();
     let active = *state.active.lock().unwrap();
+    let (active_editing, active_dirty) = state
+        .docs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|d| Some(d.id) == active)
+        .map(|d| (d.editing, d.dirty))
+        .unwrap_or((false, false));
     let settings = *state.settings.lock().unwrap();
     let layout = settings.layout;
     let toc_side = settings.toc_side;
@@ -34,12 +42,31 @@ pub fn build_menu(
     let app_menu = SubmenuBuilder::new(app, "rsmd")
         .item(&install_cli)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, None)?)
+        // 不能用 PredefinedMenuItem::quit：它直接向 NSApp 发 terminate:，tao 没有 applicationShouldTerminate，
+        // 进程会立刻退出而不经过 RunEvent::ExitRequested，脏文档守卫拿不到机会
+        .item(
+            &MenuItemBuilder::with_id("quit", "Quit rsmd")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        )
         .build()?;
-    // macOS WKWebView 的 ⌘C/⌘A 需要菜单路由，否则快捷键不生效
+    // macOS WKWebView 的剪贴板 / 撤销快捷键需要菜单路由，否则编辑器里 ⌘V / ⌘Z 不生效；
+    // CodeMirror 通过 beforeinput(historyUndo/Redo) 与 cut/copy/paste DOM 事件接住它们
+    let edit_doc = CheckMenuItemBuilder::with_id("toggle-edit", "Edit Document")
+        .accelerator("CmdOrCtrl+E")
+        .checked(active_editing)
+        .enabled(active.is_some())
+        .build(app)?;
     let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None)?)
+        .item(&PredefinedMenuItem::redo(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
+        .item(&PredefinedMenuItem::paste(app, None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
+        .separator()
+        .item(&edit_doc)
         .build()?;
 
     let open = MenuItemBuilder::with_id("open", "Open…")
@@ -53,9 +80,15 @@ pub fn build_menu(
             &MenuItemBuilder::with_id(format!("recent:{i}"), label).build(app)?,
         );
     }
+    let save = MenuItemBuilder::with_id("save", "Save")
+        .accelerator("CmdOrCtrl+S")
+        .enabled(active_dirty)
+        .build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&open)
         .item(&recent_menu.build()?)
+        .separator()
+        .item(&save)
         .build()?;
 
     let layout_tabs = CheckMenuItemBuilder::with_id("layout:tabs", "Tabs")

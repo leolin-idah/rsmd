@@ -8,6 +8,13 @@ const ipc = vi.hoisted(() => ({
 }));
 vi.mock("./ipc", () => ipc);
 
+const reload = vi.hoisted(() => ({ reloadFromDisk: vi.fn() }));
+vi.mock("./preview/document", () => ({
+  attachHost: vi.fn(),
+  editorFor: () => null,
+  reloadFromDisk: reload.reloadFromDisk,
+}));
+
 import App from "./App";
 import { useShellStore } from "./store";
 
@@ -30,7 +37,15 @@ describe("App shell", () => {
   let container: HTMLDivElement;
 
   beforeEach(async () => {
-    useShellStore.setState({ tabs: [], active: null, notices: {}, error: null });
+    useShellStore.setState({
+      tabs: [],
+      active: null,
+      notices: {},
+      error: null,
+      dirty: {},
+      editing: {},
+      conflicts: {},
+    });
     vi.clearAllMocks();
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement("div");
@@ -141,5 +156,33 @@ describe("App shell", () => {
     s().setActive(1);
     await settle();
     expect(container.querySelector(".banner")?.textContent).toBe("File was deleted");
+  });
+
+  it("renders a Reload button for a conflict banner and reloads the active doc", async () => {
+    s().addDoc(meta(1), true);
+    s().setConflict(1, true);
+    await settle();
+    const button = container.querySelector<HTMLButtonElement>(".banner .banner-action");
+    expect(button?.textContent).toBe("Reload");
+    button!.click();
+    expect(reload.reloadFromDisk).toHaveBeenCalledWith(1);
+  });
+
+  it("plain notices and errors render without a button", async () => {
+    s().setError("Cannot open: nope");
+    await settle();
+    expect(container.querySelector(".banner .banner-action")).toBeNull();
+  });
+
+  it("marks dirty tabs with a dot", async () => {
+    s().addDoc(meta(1), true);
+    s().addDoc(meta(2), true);
+    s().setDirty(2, true);
+    await settle();
+    const dots = tabEls().map((t) => t.querySelector(".tab-dirty") !== null);
+    expect(dots).toEqual([false, true]);
+    s().setDirty(2, false);
+    await settle();
+    expect(container.querySelector(".tab-dirty")).toBeNull();
   });
 });

@@ -28,8 +28,10 @@ vi.mock("../ipc", () => ipc);
 
 const lifecycle = vi.hoisted(() => ({
   openDoc: vi.fn(),
-  updateDoc: vi.fn(async () => {}),
+  updateDoc: vi.fn(),
   closeDoc: vi.fn(),
+  toggleEdit: vi.fn(),
+  saveDoc: vi.fn(async () => {}),
 }));
 vi.mock("./document", () => lifecycle);
 
@@ -52,10 +54,20 @@ describe("initTauriBridge", () => {
   });
 
   beforeEach(() => {
-    useShellStore.setState({ tabs: [], active: null, notices: {}, error: null });
+    useShellStore.setState({
+      tabs: [],
+      active: null,
+      notices: {},
+      error: null,
+      dirty: {},
+      editing: {},
+      conflicts: {},
+    });
     lifecycle.openDoc.mockClear();
     lifecycle.updateDoc.mockClear();
     lifecycle.closeDoc.mockClear();
+    lifecycle.toggleEdit.mockClear();
+    lifecycle.saveDoc.mockClear();
     ipc.openPaths.mockClear();
     ipc.activateRelative.mockClear();
   });
@@ -82,15 +94,37 @@ describe("initTauriBridge", () => {
   });
 
   it("document-opened hands the payload to the lifecycle", () => {
-    const payload = { ...meta(1), html: "<p/>", title: "T", baseDir: "/x", activate: true };
+    const payload = {
+      ...meta(1),
+      text: "# T",
+      html: "<h1/>",
+      blocks: [{ from: 1, to: 1, kind: "node" as const }],
+      title: "T",
+      baseDir: "/x",
+      activate: true,
+    };
     fire("document-opened", payload);
     expect(lifecycle.openDoc).toHaveBeenCalledWith(payload);
   });
 
   it("document-updated hands the payload to the lifecycle", () => {
-    const payload = { docId: 1, html: "<p>2</p>", title: "T2" };
+    const payload = {
+      docId: 1,
+      text: "2",
+      html: "<p>2</p>",
+      blocks: [],
+      title: "T2",
+      external: true,
+    };
     fire("document-updated", payload);
     expect(lifecycle.updateDoc).toHaveBeenCalledWith(payload);
+  });
+
+  it("toggle-edit and save-requested reach the lifecycle with their doc", () => {
+    fire("toggle-edit", { docId: 3 });
+    expect(lifecycle.toggleEdit).toHaveBeenCalledWith(3);
+    fire("save-requested", { docId: 3, closeAfter: true });
+    expect(lifecycle.saveDoc).toHaveBeenCalledWith(3, true);
   });
 
   it("document-closed hands docId and nextActive to the lifecycle", () => {

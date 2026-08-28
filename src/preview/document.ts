@@ -1,24 +1,25 @@
-import { updatePreview } from "./dom";
-import { enhance } from "./enhance";
-import { installTocSpy, refreshToc, syncActive } from "./toc";
-import type { DocId, DocOpenedPayload, DocUpdatedPayload } from "../ipc";
+import * as ipc from "../ipc";
+import type { BlockRange, DocId, DocOpenedPayload, DocUpdatedPayload, RenderPayload } from "../ipc";
+import { createEditor, type EditorHandle } from "../editor/markdownEditor";
+import { installOutlineSpy, refreshOutline, syncOutline } from "../editor/outline";
 import { useShellStore } from "../store";
 
-// 文档生命周期的唯一入口：openDoc / updateDoc / closeDoc 同时维护 pane DOM 与 store。
-// "哪个文档是 active" 只存在于 store；本模块订阅它并把结果投影到 pane 的显隐上。
+// 文档生命周期的唯一入口：open / update / close / toggleEdit / save / reload 同时维护 pane、编辑器与 store。
+// "哪个文档是 active" 只存在于 store；本模块订阅它并投影到 pane 的显隐上。
+
+interface Pending {
+  text: string;
+  html: string;
+  blocks: BlockRange[];
+}
 
 interface DocEntry {
-  pane: HTMLElement; // 滚动容器 .pane（display 显隐）
-  content: HTMLElement; // .markdown-body，morph 目标
+  pane: HTMLElement;
+  editor: EditorHandle | null; // null = 尚未物化（后台打开），首次显示时创建
+  pending: Pending | null;     // 未物化期间的最新载荷
   title: string;
-  // 文档代际（per-doc）：enhance 的异步任务完成后必须仍属于该 doc 的当前代际
-  // 才允许写 DOM。若为模块级单变量，doc A 渲染中 doc B 热刷新会把 A 的
-  // mermaid/shiki 结果全部作废且 data-enhanced 未设，A 永久停留在未高亮态。
-  generation: number;
-  scrollTop: number; // 隐藏前保存，显示时恢复
-  // 非 null = 尚未物化：pane 是隐藏空壳，html 暂存于此，首次显示时才注入 + TOC + enhance。
-  // 批量打开 N 个文件只渲染 active 那一个，其余各自在切到时付渲染成本（与单开一文件等价）。
-  pendingHtml: string | null;
+  scrollTop: number;           // 隐藏前保存，显示时恢复（display:none 会丢滚动位置）
+  conflict: DocUpdatedPayload | null; // 编辑中收到的外部改动，等用户 Reload
 }
 
 let host: HTMLElement | null = null;
@@ -28,16 +29,17 @@ export function attachHost(el: HTMLElement): void {
   host = el;
 }
 
-function isShown(entry: DocEntry): boolean {
-  return entry.pane.style.display !== "none";
+export function editorFor(docId: DocId): EditorHandle | null {
+  return registry.get(docId)?.editor ?? null;
 }
 
-/// store.active 变化的投影：隐藏其余可见 pane（保存滚动位置），显示 active 的那一个。
-/// 由 subscribeWithSelector 保证只在 active 真正变化时调用，同 id 回声不会到达这里。
+const isShown = (entry: DocEntry): boolean => entry.pane.style.display !== "none";
+const scroller = (entry: DocEntry): HTMLElement | null => entry.editor?.view.scrollDOM ?? null;
+
 function showActive(active: DocId | null): void {
   for (const [id, entry] of registry) {
     if (id !== active && isShown(entry)) {
-      entry.scrollTop = entry.pane.scrollTop;
+      entry.scrollTop = scroller(entry)?.scrollTop ?? 0;
       entry.pane.style.display = "none";
     }
   }
@@ -48,30 +50,48 @@ function showActive(active: DocId | null): void {
   const entry = registry.get(active);
   if (!entry) return; // openDoc 先建 pane 再写 store，正常不会到这里
   entry.pane.style.display = "";
-  entry.pane.scrollTop = entry.scrollTop;
-  if (entry.pendingHtml !== null) {
-    materialize(active, entry); // 首次显示：注入正文（含 refreshToc → syncActive）
-  } else {
-    // 后台 pane（display:none）热刷新时 rect 全 0 → 末标题被标 active；恢复 scrollTop=0
-    // 不触发 scroll 事件，spy 无法补救，故显示时必须显式重同步高亮。
-    syncActive(entry.pane);
-  }
+  if (entry.pending) materialize(active, entry);
+  const s = scroller(entry);
+  if (s) s.scrollTop = entry.scrollTop;
+  // 后台期间（display:none 无布局）的高亮可能失真，显示时重同步
+  syncOutline(entry.pane, entry.editor);
   document.title = entry.title;
 }
 
 useShellStore.subscribe((s) => s.active, showActive);
 
-/// 把暂存的 html 真正渲染进 pane。必须在 pane 可见后调用：refreshToc 里的
-/// syncActive 依赖真实布局。enhance 不等待——没有调用方阻塞在其完成上。
+function onDirtyChange(docId: DocId, dirty: boolean): void {
+  const store = useShellStore.getState();
+  store.setDirty(docId, dirty);
+  void ipc.setDocState(docId, store.editing[docId] === true, dirty).catch(() => {});
+}
+
+function onRendered(docId: DocId, r: RenderPayload): void {
+  const entry = registry.get(docId);
+  if (!entry) return;
+  entry.title = r.title;
+  refreshOutline(entry.pane, r.html);
+  syncOutline(entry.pane, entry.editor);
+  if (useShellStore.getState().active === docId) document.title = r.title;
+}
+
+/// 创建编辑器（只读、全 widget）。必须在 pane 可见后调用：CM 首次测量依赖真实布局。
 function materialize(docId: DocId, entry: DocEntry): void {
-  const html = entry.pendingHtml;
-  if (html === null) return;
-  entry.pendingHtml = null;
-  updatePreview(entry.content, html);
-  refreshToc(entry.pane, entry.content);
-  installTocSpy(entry.pane);
-  const gen = ++entry.generation;
-  void enhance(entry.content, () => registry.get(docId) === entry && gen === entry.generation);
+  const p = entry.pending;
+  if (!p) return;
+  entry.pending = null;
+  const editor = createEditor({
+    parent: entry.pane,
+    text: p.text,
+    html: p.html,
+    blocks: p.blocks,
+    onDirtyChange: (dirty) => onDirtyChange(docId, dirty),
+    requestRender: (text) => ipc.renderMarkdown(docId, text).catch(() => null),
+    onRendered: (r) => onRendered(docId, r),
+  });
+  entry.editor = editor;
+  refreshOutline(entry.pane, p.html);
+  installOutlineSpy(entry.pane, editor);
 }
 
 export function openDoc(doc: DocOpenedPayload): void {
@@ -80,52 +100,94 @@ export function openDoc(doc: DocOpenedPayload): void {
   pane.className = "pane";
   pane.dataset.docId = String(doc.docId);
   pane.style.display = "none"; // 显隐只由 showActive 决定
-  const content = document.createElement("div");
-  content.className = "markdown-body";
-  pane.appendChild(content);
   host.appendChild(pane);
   registry.set(doc.docId, {
     pane,
-    content,
+    editor: null,
+    pending: { text: doc.text, html: doc.html, blocks: doc.blocks },
     title: doc.title,
-    generation: 0,
     scrollTop: 0,
-    pendingHtml: doc.html,
+    conflict: null,
   });
-  // 先建 pane 再进 store：activate=true 时 store 的 active 变化会同步触发 showActive
-  useShellStore.getState().addDoc(
-    { docId: doc.docId, path: doc.path, fileName: doc.fileName },
-    doc.activate
-  );
+  // 先建 pane 再进 store：activate=true 时 store 的 active 变化会同步触发 showActive → materialize
+  useShellStore.getState().addDoc({ docId: doc.docId, path: doc.path, fileName: doc.fileName }, doc.activate);
 }
 
-export async function updateDoc(doc: DocUpdatedPayload): Promise<void> {
+function applyPayload(docId: DocId, entry: DocEntry, editor: EditorHandle, p: DocUpdatedPayload): void {
+  entry.title = p.title;
+  editor.applyExternal(p.text, p.html, p.blocks);
+  entry.conflict = null;
+  useShellStore.getState().setConflict(docId, false);
+  refreshOutline(entry.pane, p.html);
+  syncOutline(entry.pane, editor);
+  if (useShellStore.getState().active === docId) document.title = p.title;
+}
+
+export function updateDoc(doc: DocUpdatedPayload): void {
   const entry = registry.get(doc.docId);
   if (!entry) return;
+  const store = useShellStore.getState();
   // 文件又能读了（删除后恢复 / watcher 继续触发 Modified）：撕掉该 doc 的异常提示
-  useShellStore.getState().clearNotice(doc.docId);
-  entry.title = doc.title;
-  if (entry.pendingHtml !== null) {
-    // 未物化的后台文档：只替换暂存内容，零 DOM 开销；首次显示时取最新版
-    entry.pendingHtml = doc.html;
+  store.clearNotice(doc.docId);
+  if (!entry.editor) {
+    entry.pending = { text: doc.text, html: doc.html, blocks: doc.blocks };
+    entry.title = doc.title;
     return;
   }
-  // 标题只跟随 active doc：后台 tab 热刷新不得改窗口标题
-  if (useShellStore.getState().active === doc.docId) {
-    document.title = doc.title;
+  if (!doc.external && doc.text !== entry.editor.getText()) {
+    // 自己保存的回声，但保存后用户又继续输入了：回声文本已落后于编辑器，
+    // 用它做 diff 会把新输入抹掉且不进撤销栈；新文本由编辑器自己的渲染管线处理
+    return;
   }
-  updatePreview(entry.content, doc.html);
-  refreshToc(entry.pane, entry.content);
-  const gen = ++entry.generation;
-  // display:none 下热刷新安全：mermaid 用自身临时元素测量、KaTeX 纯 CSS、shiki 纯字符串
-  await enhance(entry.content, () => registry.get(doc.docId) === entry && gen === entry.generation);
+  if (doc.external && entry.editor.isDirty()) {
+    // 外部改了文件而本地有未保存改动：不覆盖，挂横幅等用户决定（Reload 或 Save 覆盖磁盘）
+    entry.conflict = doc;
+    store.setConflict(doc.docId, true);
+    return;
+  }
+  applyPayload(doc.docId, entry, entry.editor, doc);
+}
+
+export function toggleEdit(docId: DocId): void {
+  const entry = registry.get(docId);
+  if (!entry) return;
+  if (entry.pending) materialize(docId, entry); // 只对 active（已物化）触发，防御性处理
+  const editor = entry.editor!;
+  const store = useShellStore.getState();
+  const editing = store.editing[docId] !== true;
+  if (editing) editor.beginEditing();
+  else void editor.endEditing();
+  store.setEditing(docId, editing);
+  void ipc.setDocState(docId, editing, editor.isDirty()).catch(() => {});
+}
+
+export async function saveDoc(docId: DocId, closeAfter = false): Promise<void> {
+  const entry = registry.get(docId);
+  const editor = entry?.editor;
+  if (!entry || !editor) return;
+  try {
+    await ipc.saveDoc(docId, editor.getText());
+  } catch (err) {
+    useShellStore.getState().setError(String(err));
+    return;
+  }
+  editor.markSaved(); // → onDirtyChange(false) → store + Rust
+  entry.conflict = null; // 保存即以本地为准
+  useShellStore.getState().setConflict(docId, false);
+  if (closeAfter) void ipc.closeDoc(docId).catch(() => {});
+}
+
+export function reloadFromDisk(docId: DocId): void {
+  const entry = registry.get(docId);
+  if (!entry?.editor || !entry.conflict) return;
+  applyPayload(docId, entry, entry.editor, entry.conflict);
 }
 
 export function closeDoc(docId: DocId, nextActive: DocId | null): void {
   const entry = registry.get(docId);
   if (!entry) return;
-  entry.generation++; // 使在途 enhance 过期
   registry.delete(docId);
+  entry.editor?.destroy();
   entry.pane.remove();
   // pane 已移除再改 store：若 active 因此变化，showActive 只会看到仍存在的 pane
   useShellStore.getState().removeDoc(docId, nextActive);

@@ -8,6 +8,7 @@ export function TabBar() {
   const tabs = useShellStore((s) => s.tabs);
   const active = useShellStore((s) => s.active);
   const notices = useShellStore((s) => s.notices);
+  const dirty = useShellStore((s) => s.dirty);
   const activeRef = useRef<HTMLDivElement | null>(null);
   // tab 条溢出后可横向滚动（side-list 布局则是纵向）：切文档时把 active tab 拉回可见区，
   // 否则从菜单/快捷键切到滚动区外的文档时看不到高亮。layout effect 在提交内同步执行，
@@ -38,6 +39,9 @@ export function TabBar() {
           title={t.path}
           onClick={() => select(t.docId)}
         >
+          {dirty[t.docId] === true && (
+            <span className="tab-dirty" aria-label="Unsaved changes">●</span>
+          )}
           {notices[t.docId] !== undefined && (
             <span className="tab-dot" aria-label="File unavailable" />
           )}

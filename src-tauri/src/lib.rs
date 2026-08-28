@@ -76,6 +76,14 @@ pub fn run() {
                         });
                 }
                 "install-cli" => shell::install_cli(app),
+                "toggle-edit" => session::request_toggle_edit(app),
+                "save" => session::request_save(app),
+                // 自定义 Quit：脏文档先问（request_quit 返回 true 表示已弹框）；干净则走 exit → ExitRequested 放行
+                "quit" => {
+                    if !session::request_quit(app) {
+                        app.exit(0);
+                    }
+                }
                 "close-tab" => session::close_active(app),
                 "next-tab" => session::cycle(app, 1),
                 "prev-tab" => session::cycle(app, -1),
@@ -107,8 +115,21 @@ pub fn run() {
             commands::set_active_doc,
             commands::activate_relative,
             commands::get_settings,
-            commands::frontend_ready
-        ]);
+            commands::frontend_ready,
+            commands::render_markdown,
+            commands::save_doc,
+            commands::set_doc_state
+        ])
+        .on_window_event(|window, event| {
+            // 红点关窗：有脏文档先问；用户选丢弃后 session 调 app.exit，再次进入时不再脏
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                if session::any_dirty(app) {
+                    api.prevent_close();
+                    session::request_quit(app);
+                }
+            }
+        });
 
     let app = builder
         .build(tauri::generate_context!())
@@ -116,11 +137,19 @@ pub fn run() {
 
     // macOS Finder 双击/"打开方式"走 RunEvent::Opened；
     // Opened 可能早于前端就绪——pending_or_open 已处理暂存（spec §4 握手闭环）
-    app.run(|app_handle, event| {
+    app.run(|app_handle, event| match event {
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Opened { urls } = event {
+        tauri::RunEvent::Opened { urls } => {
             let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
             session::pending_or_open(app_handle, paths);
         }
+        // ⌘Q / 所有窗口关闭：有脏文档先问
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            if session::any_dirty(app_handle) {
+                api.prevent_exit();
+                session::request_quit(app_handle);
+            }
+        }
+        _ => {}
     });
 }

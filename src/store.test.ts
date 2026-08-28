@@ -41,7 +41,15 @@ describe("disambiguate", () => {
 
 describe("shell store", () => {
   beforeEach(() => {
-    useShellStore.setState({ tabs: [], active: null, notices: {}, error: null });
+    useShellStore.setState({
+      tabs: [],
+      active: null,
+      notices: {},
+      error: null,
+      dirty: {},
+      editing: {},
+      conflicts: {},
+    });
   });
   const s = () => useShellStore.getState();
 
@@ -170,7 +178,7 @@ describe("shell store", () => {
       s().addDoc(meta(1), true);
       s().setNotice(1, "notice");
       s().setError("error");
-      expect(selectBanner(s())).toBe("error");
+      expect(selectBanner(s())).toEqual({ text: "error", action: null });
     });
 
     it("shows only the active doc's notice", () => {
@@ -179,11 +187,56 @@ describe("shell store", () => {
       s().setNotice(1, "notice for 1");
       expect(selectBanner(s())).toBeNull();
       s().setActive(1);
-      expect(selectBanner(s())).toBe("notice for 1");
+      expect(selectBanner(s())).toEqual({ text: "notice for 1", action: null });
     });
 
     it("is null with no docs and no error", () => {
       expect(selectBanner(s())).toBeNull();
+    });
+  });
+
+  describe("editing flags", () => {
+    it("tracks dirty per doc and drops it when the doc is removed", () => {
+      s().addDoc(meta(1), true);
+      s().setDirty(1, true);
+      expect(s().dirty[1]).toBe(true);
+      s().setDirty(1, false);
+      expect(s().dirty[1]).toBeUndefined();
+      s().setDirty(1, true);
+      s().setEditing(1, true);
+      s().setConflict(1, true);
+      s().removeDoc(1, null);
+      expect(s().dirty[1]).toBeUndefined();
+      expect(s().editing[1]).toBeUndefined();
+      expect(s().conflicts[1]).toBeUndefined();
+    });
+
+    it("clearing an absent flag is a no-op (no subscriber wake-up)", () => {
+      const before = useShellStore.getState();
+      s().setEditing(1, false);
+      s().setConflict(1, false);
+      expect(useShellStore.getState()).toBe(before);
+    });
+
+    it("conflict banner outranks the doc notice but not the global error", () => {
+      s().addDoc(meta(1), true);
+      s().setNotice(1, "notice");
+      s().setConflict(1, true);
+      expect(selectBanner(s())).toEqual({
+        text: "File changed on disk. Reload to discard your unsaved edits.",
+        action: "reload",
+      });
+      s().setError("error");
+      expect(selectBanner(s())).toEqual({ text: "error", action: null });
+    });
+
+    it("conflict banner follows the active doc", () => {
+      s().addDoc(meta(1), true);
+      s().addDoc(meta(2), true);
+      s().setConflict(1, true);
+      expect(selectBanner(s())).toBeNull();
+      s().setActive(1);
+      expect(selectBanner(s())?.action).toBe("reload");
     });
   });
 });

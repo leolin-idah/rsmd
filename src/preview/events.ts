@@ -1,7 +1,7 @@
 import * as ipc from "../ipc";
 import type { Settings } from "../ipc";
 import { useShellStore } from "../store";
-import { closeDoc, openDoc, updateDoc } from "./document";
+import { closeDoc, openDoc, saveDoc, toggleEdit, updateDoc } from "./document";
 
 // Rust 事件 → 前端动作 的接线表。每个事件只对应一个调用：
 // 文档生命周期交给 document.ts（它同时维护 pane 与 store），其余直接改 store。
@@ -27,7 +27,10 @@ function installKeyboardShortcuts(): void {
 export async function initTauriBridge(): Promise<void> {
   const store = useShellStore.getState(); // actions 引用稳定，可提前解构
   await ipc.on("document-opened", openDoc);
-  await ipc.on("document-updated", (p) => void updateDoc(p));
+  await ipc.on("document-updated", updateDoc);
+  // ⌘E / ⌘S 是菜单加速键，按键被菜单截获，只能由 Rust 转成事件
+  await ipc.on("toggle-edit", (p) => toggleEdit(p.docId));
+  await ipc.on("save-requested", (p) => void saveDoc(p.docId, p.closeAfter));
   // 一切 active 变更的统一回执；setActive 幂等，点击 tab 的本地先行不抖动
   await ipc.on("document-focus", (p) => store.setActive(p.docId));
   await ipc.on("document-closed", (p) => closeDoc(p.docId, p.nextActive));

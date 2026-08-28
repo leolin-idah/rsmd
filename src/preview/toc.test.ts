@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildToc, extractHeadings, pickCurrent, refreshToc, syncActive } from "./toc";
+import { buildToc, extractHeadings, pickCurrent } from "./toc";
 
 // 模拟 comrak header_ids + ammonia 清洗后的输出：id 在内嵌 <a class="anchor"> 上
 const HTML = `
@@ -80,62 +80,5 @@ describe("pickCurrent", () => {
         { id: "c", top: 500 },
       ])
     ).toBe("b");
-  });
-});
-
-function pane(html: string): { p: HTMLElement; c: HTMLElement } {
-  const p = document.createElement("div");
-  p.className = "pane";
-  const c = content(html);
-  p.appendChild(c);
-  document.body.appendChild(p);
-  return { p, c };
-}
-
-// jsdom 无布局：手动指定各标题相对视口的 top（pane rect 全 0，等价于相对 pane 顶）
-function layout(c: HTMLElement, tops: number[]): void {
-  Array.from(c.querySelectorAll<HTMLElement>("h1,h2,h3")).forEach((h, i) => {
-    h.getBoundingClientRect = () => ({ top: tops[i] }) as DOMRect;
-  });
-}
-
-describe("refreshToc / syncActive", () => {
-  it("appends nav.toc to the pane and highlights the current section", () => {
-    const { p, c } = pane(HTML);
-    layout(c, [-100, 10, 300]); // setup 刚越过阈值线
-    refreshToc(p, c);
-    const active = p.querySelectorAll("nav.toc a.active");
-    expect(active.length).toBe(1);
-    expect((active[0] as HTMLElement).dataset.target).toBe("setup");
-  });
-
-  it("rebuilds instead of duplicating on refresh", () => {
-    const { p, c } = pane(HTML);
-    refreshToc(p, c);
-    c.innerHTML = `<h1><a id="only"></a>Only</h1>`;
-    refreshToc(p, c);
-    expect(p.querySelectorAll("nav.toc").length).toBe(1);
-    expect(p.querySelectorAll("nav.toc a").length).toBe(1);
-  });
-
-  it("removes the toc when headings disappear after refresh", () => {
-    const { p, c } = pane(HTML);
-    refreshToc(p, c);
-    c.innerHTML = "<p>no headings anymore</p>";
-    refreshToc(p, c);
-    expect(p.querySelector("nav.toc")).toBeNull();
-  });
-
-  it("syncActive moves the highlight as measurements change", () => {
-    const { p, c } = pane(HTML);
-    layout(c, [-500, -200, 5]); // 滚到 deps
-    refreshToc(p, c);
-    syncActive(p);
-    expect(p.querySelector("a.active")!.getAttribute("href")).toBe("#deps");
-  });
-
-  it("syncActive is a no-op on a pane without toc", () => {
-    const { p } = pane("<p>x</p>");
-    expect(() => syncActive(p)).not.toThrow();
   });
 });

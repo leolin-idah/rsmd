@@ -11,6 +11,11 @@ export interface TabInfo {
 
 export type DocMeta = Omit<TabInfo, "label">;
 
+export interface Banner {
+  text: string;
+  action: "reload" | null; // reload = 编辑中收到外部改动，按钮丢弃本地改动重载
+}
+
 /// 前端唯一的文档状态。权威列表在 Rust，这里是只由事件更新的派生副本
 /// （唯一例外是切 tab 的本地先行）。pane DOM 由 preview/document.ts 订阅本 store 投影。
 export interface ShellState {
@@ -20,6 +25,10 @@ export interface ShellState {
   notices: Readonly<Record<DocId, string>>;
   // 全局横幅：open-error 等尚无 doc 可归属的错误
   error: string | null;
+  // 以下三组都是稀疏表：只存 true，置 false 即删键
+  dirty: Readonly<Record<DocId, boolean>>; // 编辑器有未保存改动 → tab ●
+  editing: Readonly<Record<DocId, boolean>>; // 处于编辑态（链接需 ⌘+点击）
+  conflicts: Readonly<Record<DocId, boolean>>; // 编辑中收到外部改动，等 Reload
 
   addDoc(meta: DocMeta, activate: boolean): void;
   removeDoc(docId: DocId, nextActive: DocId | null): void;
@@ -27,6 +36,33 @@ export interface ShellState {
   setNotice(docId: DocId, message: string): void;
   clearNotice(docId: DocId): void;
   setError(message: string): void;
+  setDirty(docId: DocId, dirty: boolean): void;
+  setEditing(docId: DocId, editing: boolean): void;
+  setConflict(docId: DocId, conflict: boolean): void;
+}
+
+type FlagKey = "dirty" | "editing" | "conflicts";
+
+/// 稀疏布尔表的统一写法：不变则返回原对象（订阅者不被唤醒）
+function setFlag(
+  s: ShellState,
+  key: FlagKey,
+  docId: DocId,
+  value: boolean
+): Partial<ShellState> | ShellState {
+  const table = s[key];
+  const has = table[docId] === true;
+  if (has === value) return s;
+  const next = { ...table };
+  if (value) next[docId] = true;
+  else delete next[docId];
+  return { [key]: next } as Partial<ShellState>;
+}
+
+function without<T>(table: Readonly<Record<DocId, T>>, docId: DocId): Record<DocId, T> {
+  const next = { ...table };
+  delete next[docId];
+  return next;
 }
 
 /// 标签消歧：默认 fileName；重名时从路径末尾向前逐段追加（docs/README.md），
@@ -68,6 +104,9 @@ export const useShellStore = create<ShellState>()(
     active: null,
     notices: {},
     error: null,
+    dirty: {},
+    editing: {},
+    conflicts: {},
 
     // 成功打开（含聚焦已打开的）即撕掉上一次的全局错误横幅
     addDoc(meta, activate) {
@@ -90,7 +129,14 @@ export const useShellStore = create<ShellState>()(
             : nextActive !== null && tabs.some((t) => t.docId === nextActive)
               ? nextActive
               : null;
-        return { tabs, notices, active };
+        return {
+          tabs,
+          notices,
+          active,
+          dirty: without(s.dirty, docId),
+          editing: without(s.editing, docId),
+          conflicts: without(s.conflicts, docId),
+        };
       });
     },
 
@@ -117,11 +163,26 @@ export const useShellStore = create<ShellState>()(
     setError(message) {
       set({ error: message });
     },
+
+    setDirty(docId, dirty) {
+      set((s) => setFlag(s, "dirty", docId, dirty));
+    },
+    setEditing(docId, editing) {
+      set((s) => setFlag(s, "editing", docId, editing));
+    },
+    setConflict(docId, conflict) {
+      set((s) => setFlag(s, "conflicts", docId, conflict));
+    },
   }))
 );
 
-/// 横幅只渲染一条：全局错误优先，否则 active doc 自己的提示。
-export function selectBanner(s: ShellState): string | null {
-  if (s.error !== null) return s.error;
-  return s.active !== null ? (s.notices[s.active] ?? null) : null;
+export const CONFLICT_TEXT = "File changed on disk. Reload to discard your unsaved edits.";
+
+/// 横幅只渲染一条：全局错误 > active doc 的冲突 > active doc 的提示。
+export function selectBanner(s: ShellState): Banner | null {
+  if (s.error !== null) return { text: s.error, action: null };
+  if (s.active === null) return null;
+  if (s.conflicts[s.active]) return { text: CONFLICT_TEXT, action: "reload" };
+  const notice = s.notices[s.active];
+  return notice !== undefined ? { text: notice, action: null } : null;
 }

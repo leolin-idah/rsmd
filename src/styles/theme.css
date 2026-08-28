@@ -47,27 +47,42 @@ body[data-layout="sideList"] #shell {
   min-height: 0;
 }
 
-/* 每文档常驻一个 pane，滚动位置各自独立；切换只改 display。
-   flex 两列：内容列 + 右侧 TOC 列 */
+/* 每文档常驻一个 pane，切换只改 display。滚动容器是 CodeMirror 的 .cm-scroller（在 pane 内），
+   pane 本身不滚；flex 两列：编辑器列 + TOC 列 */
 .pane {
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
-  /* flex 默认 align-items: stretch 会把 .markdown-body 撑到 pane 的高度，
-     导致内容溢出、底部 padding 消失；改为按内容高度排列 */
-  align-items: flex-start;
+  align-items: stretch;
 }
 
-.pane > .markdown-body {
+.pane > .cm-editor {
   flex: 1;
   min-width: 0;
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 32px 24px;
-  /* WebKit 跨块选区会把高亮 gap 填充到最近 selection root（此前是全宽的
-     .pane，因其 overflow 而成为 root），导致选中多行时高亮铺满窗口。
-     position: relative 让本元素成为 selection root，把高亮限制在内容列内。 */
+  height: 100%;
+}
+
+/* 渲染块：github-markdown-css 提供排版；内边距/底色由 .cm-content 统一负责。
+   position: relative 让每个块成为自己的 selection root，跨块选区高亮不会铺满窗口。
+   块间距必须是 widget 盒内的 padding：每个 widget 只装一个顶层元素，github-markdown-css 的
+   >*:first-child / >*:last-child 会把它的外边距清零；而 CM 的高度图按 widget 盒测量，
+   外边距若穿透盒子会让 lineBlockAt().top 与滚动估算漂移。数值复刻 github 的折叠后间距：
+   普通块下方 16px；标题上方多 8px（16 + 8 = 24）；分隔线上下 24px。
+   white-space 必须重置：.cm-content 是 white-space: pre，comrak 输出里 <tr>/<li> 之间的换行
+   若被继承会渲染成空行，表格行与列表项之间出现大片空隙 */
+.cm-content .markdown-body.rsmd-block {
+  padding: 0 0 16px;
+  background: transparent;
   position: relative;
+  white-space: normal;
+}
+
+.cm-content .markdown-body.rsmd-block:has(> h1, > h2, > h3, > h4, > h5, > h6) {
+  padding-top: 8px;
+}
+
+.cm-content .markdown-body.rsmd-block:has(> hr) {
+  padding: 8px 0 24px;
 }
 
 /* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
@@ -166,6 +181,13 @@ body[data-layout="tabs"] .tab {
   background: #bf8700;
 }
 
+.tab-dirty {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  color: #bf8700;
+}
+
 .tab-close {
   flex: none;
   border: 0;
@@ -219,20 +241,22 @@ body[data-layout="tabs"] .tab {
     background: #d29922;
   }
 
+  .tab-dirty {
+    color: #d29922;
+  }
+
   .tab-close:hover {
     background: rgba(255, 255, 255, 0.15);
   }
 }
 
-/* ---- TOC：pane 内侧边 sticky 列，滚动跟随高亮 ---- */
+/* ---- TOC：pane 内侧边列，滚动跟随高亮 ---- */
 
 nav.toc {
   flex: none;
   width: 220px;
   box-sizing: border-box;
-  position: sticky;
-  top: 0;
-  max-height: 100%;
+  height: 100%;
   overflow-y: auto;
   padding: 32px 12px 32px 0;
   font-family: -apple-system, sans-serif;
@@ -244,7 +268,7 @@ body[data-toc="off"] nav.toc {
 }
 
 /* 左置只翻转 flex 顺序与内边距：DOM 仍是「内容 + TOC」，
-   refreshToc / morphdom 无需感知该设置 */
+   refreshOutline 无需感知该设置 */
 body[data-toc-side="left"] nav.toc {
   order: -1;
   padding: 32px 0 32px 12px;
@@ -301,6 +325,9 @@ body[data-toc-side="left"] nav.toc {
 
 .banner {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 8px 16px;
   background: #fff3cd;
   color: #664d03;
@@ -308,10 +335,33 @@ body[data-toc-side="left"] nav.toc {
   font-size: 13px;
 }
 
+.banner-action {
+  margin-left: auto;
+  border: 1px solid #997404;
+  border-radius: 6px;
+  padding: 2px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.banner-action:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
 @media (prefers-color-scheme: dark) {
   .banner {
     background: #4d3800;
     color: #ffe69c;
+  }
+
+  .banner-action {
+    border-color: #ffe69c;
+  }
+
+  .banner-action:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 

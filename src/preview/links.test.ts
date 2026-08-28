@@ -6,6 +6,12 @@ const ipc = vi.hoisted(() => ({
 }));
 vi.mock("../ipc", () => ipc);
 
+const editor = vi.hoisted(() => ({
+  scrollToLine: vi.fn(),
+  headings: () => [{ id: "intro", line: 12 }],
+}));
+vi.mock("./document", () => ({ editorFor: (docId: number) => (docId === 7 ? editor : null) }));
+
 import { installLinkHandler } from "./links";
 import { useShellStore } from "../store";
 
@@ -32,7 +38,7 @@ describe("installLinkHandler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    useShellStore.setState({ error: null });
+    useShellStore.setState({ error: null, editing: {} });
     document.body.innerHTML = "";
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -64,16 +70,36 @@ describe("installLinkHandler", () => {
     expect(useShellStore.getState().error).toBe("Cannot open: missing.md");
   });
 
-  it("resolves anchors inside the clicked pane only (跨文档同名 id)", () => {
-    const scrollSpy = vi.fn();
-    Element.prototype.scrollIntoView = scrollSpy;
-    const paneA = addPane(host, 1, '<h2 id="intro">A</h2>');
-    const paneB = addPane(host, 2, '<h2 id="intro">B</h2>');
+  it("scrolls anchors via the pane's editor heading index (target may not be in the DOM)", () => {
+    click(pane, "#intro");
+    expect(editor.scrollToLine).toHaveBeenCalledWith(12);
+  });
 
-    click(paneB, "#intro");
-    expect(scrollSpy).toHaveBeenCalledTimes(1);
-    expect(scrollSpy.mock.contexts[0]).toBe(paneB.querySelector("#intro"));
-    expect(scrollSpy.mock.contexts[0]).not.toBe(paneA.querySelector("#intro"));
+  it("ignores anchors whose heading is unknown to the editor", () => {
+    click(pane, "#nope");
+    expect(editor.scrollToLine).not.toHaveBeenCalled();
+  });
+
+  it("in edit mode a plain click on a link inside a rendered block is left to the editor; ⌘+click follows it", () => {
+    useShellStore.setState({ editing: { 7: true } });
+    const block = document.createElement("div");
+    block.className = "rsmd-block";
+    pane.appendChild(block);
+    const a = document.createElement("a");
+    a.setAttribute("href", "https://example.com");
+    // 编辑态下处理器放行块内链接（不 preventDefault），测试里拦掉默认导航以免 jsdom 报未实现
+    a.addEventListener("click", (e) => e.preventDefault());
+    block.appendChild(a);
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ipc.openExternal).not.toHaveBeenCalled();
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com");
+  });
+
+  it("in edit mode links outside rendered blocks (e.g. the TOC) still work on plain click", () => {
+    useShellStore.setState({ editing: { 7: true } });
+    click(pane, "#intro");
+    expect(editor.scrollToLine).toHaveBeenCalledWith(12);
   });
 
   it("ignores links outside any pane", () => {

@@ -2,8 +2,11 @@
 //! 对宿主（窗口标题、原生菜单、事件推送、最近文件）的依赖全部经 [`Shell`] trait，
 //! 由 `shell.rs` 为 `AppHandle` 实现；测试用记录调用的 fake 替代。
 
-use crate::ipc::{DocClosedPayload, DocOpenedPayload, DocRefPayload, DocUpdatedPayload, Event};
-use crate::render;
+use crate::ipc::{
+    DocClosedPayload, DocOpenedPayload, DocRefPayload, DocUpdatedPayload, Event, RenderPayload,
+    SaveRequestedPayload,
+};
+use crate::render::{self, BlockRange};
 use crate::settings::Settings;
 use crate::watcher::{FileEvent, FileEventKind, FileWatcher};
 use std::path::{Path, PathBuf};
@@ -15,6 +18,20 @@ pub struct OpenDoc {
     pub path: PathBuf,                // canonicalize 后
     pub title: String,                // 首个 heading 或文件名 stem
     pub watcher: Option<FileWatcher>, // None = watch 启动失败，已降级
+    /// 最近一次"看到的磁盘内容"的 hash：打开 / 外部改动 / 自己保存后更新。
+    /// watcher 事件读到的内容 hash 与之相等 = 自己保存的回声，不算外部改动。
+    pub disk_hash: u64,
+    /// 前端编辑器有未保存改动（前端经 set_doc_state 同步）；驱动标题 ●、Save 菜单、关闭/退出守卫
+    pub dirty: bool,
+    /// 前端处于编辑态（Edit Document 菜单勾选态）
+    pub editing: bool,
+}
+
+pub fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
 }
 
 #[derive(Default)]
@@ -27,6 +44,13 @@ pub struct AppState {
     pub ready: AtomicBool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
 /// 会话对宿主的全部要求。`Clone + 'static` 是因为 watcher 回调要在别的线程持有它。
 pub trait Shell: Clone + Send + Sync + 'static {
     fn state(&self) -> &AppState;
@@ -36,31 +60,103 @@ pub trait Shell: Clone + Send + Sync + 'static {
     /// open / close / focus 后重建原生菜单（勾选态与 enable 态）
     fn refresh_menu(&self);
     fn remember_recent(&self, path: &Path);
+    /// 关闭脏文档前的原生确认框（Save / Don't Save / Cancel）；用户选择后回调，可能在别的线程。
+    fn confirm_close(&self, title: &str, on_choice: Box<dyn FnOnce(CloseChoice) + Send + 'static>);
+    /// 退出前的原生确认框，只提供"丢弃并退出 / 取消"；仅丢弃时回调。
+    fn confirm_quit(&self, dirty_count: usize, on_discard: Box<dyn FnOnce() + Send + 'static>);
+    fn quit(&self);
+}
+
+fn mark_clean(state: &AppState, doc_id: u64) {
+    if let Some(d) = state.docs.lock().unwrap().iter_mut().find(|d| d.id == doc_id) {
+        d.dirty = false;
+    }
+}
+
+pub fn any_dirty<S: Shell>(shell: &S) -> bool {
+    shell.state().docs.lock().unwrap().iter().any(|d| d.dirty)
+}
+
+/// 退出守卫：有脏文档则拦截并弹框，返回 true；用户选丢弃 → 全部标记干净后 quit
+/// （quit 会再次触发 ExitRequested，此时 any_dirty 为 false 放行）。
+pub fn request_quit<S: Shell>(shell: &S) -> bool {
+    let n = shell.state().docs.lock().unwrap().iter().filter(|d| d.dirty).count();
+    if n == 0 {
+        return false;
+    }
+    let sh = shell.clone();
+    shell.confirm_quit(
+        n,
+        Box::new(move || {
+            for d in sh.state().docs.lock().unwrap().iter_mut() {
+                d.dirty = false;
+            }
+            sh.quit();
+        }),
+    );
+    true
 }
 
 struct RenderedDoc {
+    text: String,
     html: String,
+    blocks: Vec<BlockRange>,
     title: String,
     base_dir: String,
+    hash: u64,
+}
+
+/// 首个 H1，否则文件名 stem，再否则 "rsmd"（与 V1 行为一致）。
+fn doc_title(path: &Path, first_heading: Option<String>) -> String {
+    first_heading.unwrap_or_else(|| {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "rsmd".into())
+    })
 }
 
 fn load_and_render(path: &Path) -> Result<RenderedDoc, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
-    let text = String::from_utf8_lossy(&bytes);
+    let hash = content_hash(&bytes);
+    let text = String::from_utf8_lossy(&bytes).into_owned();
     let base_dir = path
         .parent()
         .ok_or_else(|| "file has no parent directory".to_string())?;
     let result = render::render(&text, base_dir);
-    let title = result.first_heading.unwrap_or_else(|| {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "rsmd".into())
-    });
     Ok(RenderedDoc {
+        title: doc_title(path, result.first_heading),
+        text,
         html: result.html,
-        title,
+        blocks: result.blocks,
         base_dir: base_dir.to_string_lossy().into_owned(),
+        hash,
     })
+}
+
+/// 原生标题：脏文档前缀 ●（Tauri 未暴露 NSWindow.documentEdited，用标题前缀代替）。
+fn window_title(title: &str, dirty: bool) -> String {
+    if dirty {
+        format!("● {title}")
+    } else {
+        title.to_string()
+    }
+}
+
+/// 一切原生标题变更的唯一出口：按 active doc 的 title/dirty 重算；无 active 为 "rsmd"。
+/// 先取 active（立即释放）再取 docs，不嵌套持锁。
+fn sync_title<S: Shell>(shell: &S) {
+    let state = shell.state();
+    let active = *state.active.lock().unwrap();
+    let title = active.and_then(|id| {
+        state
+            .docs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| window_title(&d.title, d.dirty))
+    });
+    shell.set_title(title.as_deref().unwrap_or("rsmd"));
 }
 
 /// path → docId 反查；两侧均为 canonicalize 后的路径。
@@ -96,15 +192,12 @@ fn relative_target(ids: &[u64], active: Option<u64>, offset: i64) -> Option<u64>
 /// emit `document-focus`（前端 setActive 幂等）。doc 不存在则忽略。
 pub fn focus_doc<S: Shell>(shell: &S, doc_id: u64) {
     let state = shell.state();
-    let title = {
-        let docs = state.docs.lock().unwrap();
-        docs.iter()
-            .find(|d| d.id == doc_id)
-            .map(|d| d.title.clone())
-    };
-    let Some(title) = title else { return };
+    let exists = state.docs.lock().unwrap().iter().any(|d| d.id == doc_id);
+    if !exists {
+        return;
+    }
     *state.active.lock().unwrap() = Some(doc_id);
-    shell.set_title(&title);
+    sync_title(shell);
     shell.refresh_menu();
     shell.emit(Event::DocumentFocus(DocRefPayload { doc_id }));
 }
@@ -118,28 +211,29 @@ pub fn on_file_event<S: Shell>(shell: &S, ev: FileEvent) {
     match ev.kind {
         FileEventKind::Modified => {
             // 瞬态读失败（如写入中途）忽略，下一次事件会补上
-            let Ok(r) = load_and_render(&ev.path) else {
-                return;
-            };
-            // render 期间 doc 可能已被关闭：title 更新与存在性检查同临界区
-            let still_open = {
+            let Ok(r) = load_and_render(&ev.path) else { return };
+            // render 期间 doc 可能已被关闭：存在性检查、title 更新、回声判定同临界区
+            let external = {
                 let mut docs = state.docs.lock().unwrap();
-                docs.iter_mut()
-                    .find(|d| d.id == doc_id)
-                    .map(|d| d.title = r.title.clone())
-                    .is_some()
+                let Some(d) = docs.iter_mut().find(|d| d.id == doc_id) else {
+                    return;
+                };
+                let external = d.disk_hash != r.hash;
+                d.disk_hash = r.hash; // 磁盘上现在就是这份内容：之后的事件以它为基线
+                d.title = r.title.clone();
+                external
             };
-            if !still_open {
-                return;
-            }
             shell.emit(Event::DocumentUpdated(DocUpdatedPayload {
                 doc_id,
+                text: r.text,
                 html: r.html,
-                title: r.title.clone(),
+                blocks: r.blocks,
+                title: r.title,
+                external,
             }));
             // 仅 active doc 同步原生标题栏：后台 tab 热刷新不得改窗口标题
             if *state.active.lock().unwrap() == Some(doc_id) {
-                shell.set_title(&r.title);
+                sync_title(shell);
             }
         }
         FileEventKind::Removed => {
@@ -186,6 +280,9 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
                     path: path.clone(),
                     title: rendered.title.clone(),
                     watcher, // 竞态失败分支不 push：本次 watcher 随作用域 Drop 停止
+                    disk_hash: rendered.hash,
+                    dirty: false,
+                    editing: false,
                 });
                 Ok(id)
             }
@@ -203,7 +300,7 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
 
     if activate {
         *state.active.lock().unwrap() = Some(doc_id);
-        shell.set_title(&rendered.title);
+        sync_title(shell);
     }
     let file_name = path
         .file_name()
@@ -213,7 +310,9 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
         doc_id,
         path: path.to_string_lossy().into_owned(),
         file_name,
+        text: rendered.text,
         html: rendered.html,
+        blocks: rendered.blocks,
         title: rendered.title,
         base_dir: rendered.base_dir,
         activate,
@@ -315,6 +414,32 @@ pub fn cycle<S: Shell>(shell: &S, offset: i64) {
 /// 移除 doc，计算 nextActive，emit `document-closed`，重建菜单。已关闭则忽略。
 pub fn close_doc<S: Shell>(shell: &S, doc_id: u64) {
     let state = shell.state();
+    let dirty_title = state
+        .docs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|d| d.id == doc_id && d.dirty)
+        .map(|d| d.title.clone());
+    if let Some(title) = dirty_title {
+        // 脏文档：交给用户决定。Save 由前端保存后再次调用 close_doc（那时已不脏）完成关闭
+        let sh = shell.clone();
+        shell.confirm_close(
+            &title,
+            Box::new(move |choice| match choice {
+                CloseChoice::Save => sh.emit(Event::SaveRequested(SaveRequestedPayload {
+                    doc_id,
+                    close_after: true,
+                })),
+                CloseChoice::Discard => {
+                    mark_clean(sh.state(), doc_id);
+                    close_doc(&sh, doc_id);
+                }
+                CloseChoice::Cancel => {}
+            }),
+        );
+        return;
+    }
     // 唯一的锁嵌套点，固定锁序 docs → active
     let next = {
         let mut docs = state.docs.lock().unwrap();
@@ -327,21 +452,102 @@ pub fn close_doc<S: Shell>(shell: &S, doc_id: u64) {
         *state.active.lock().unwrap() = next;
         next
     };
-    let title = next.and_then(|id| {
-        state
-            .docs
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.title.clone())
-    });
-    shell.set_title(title.as_deref().unwrap_or("rsmd"));
+    sync_title(shell);
     shell.refresh_menu();
     shell.emit(Event::DocumentClosed(DocClosedPayload {
         doc_id,
         next_active: next,
     }));
+}
+
+fn path_of(state: &AppState, doc_id: u64) -> Result<PathBuf, String> {
+    state
+        .docs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|d| d.id == doc_id)
+        .map(|d| d.path.clone())
+        .ok_or_else(|| "Document is no longer open".to_string())
+}
+
+/// 编辑中的按需渲染：用文档目录解析相对图片路径；顺带更新 title（active 时同步原生标题）。
+pub fn render_markdown<S: Shell>(
+    shell: &S,
+    doc_id: u64,
+    text: &str,
+) -> Result<RenderPayload, String> {
+    let state = shell.state();
+    let path = path_of(state, doc_id)?;
+    let base_dir = path
+        .parent()
+        .ok_or_else(|| "file has no parent directory".to_string())?;
+    let result = render::render(text, base_dir);
+    let title = doc_title(&path, result.first_heading);
+    if let Some(d) = state.docs.lock().unwrap().iter_mut().find(|d| d.id == doc_id) {
+        d.title = title.clone();
+    }
+    if *state.active.lock().unwrap() == Some(doc_id) {
+        sync_title(shell);
+    }
+    Ok(RenderPayload {
+        html: result.html,
+        blocks: result.blocks,
+        title,
+    })
+}
+
+/// 原地写而非临时文件 + rename：保留 inode / 权限 / xattr；路径已 canonicalize，不会覆盖符号链接本身。
+/// 写入期间 watcher 可能收到事件，但 200ms 防抖后再读时写已完成，hash 判定为回声。
+pub fn save_doc<S: Shell>(shell: &S, doc_id: u64, text: &str) -> Result<(), String> {
+    let state = shell.state();
+    let path = path_of(state, doc_id)?;
+    std::fs::write(&path, text.as_bytes()).map_err(|e| format!("Failed to save: {e}"))?;
+    let hash = content_hash(text.as_bytes());
+    if let Some(d) = state.docs.lock().unwrap().iter_mut().find(|d| d.id == doc_id) {
+        d.disk_hash = hash;
+        d.dirty = false;
+    }
+    sync_title(shell);
+    shell.refresh_menu();
+    Ok(())
+}
+
+/// 前端在 editing / dirty 变化时回写；驱动标题 ●、Edit Document 勾选、Save enable。
+pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, editing: bool, dirty: bool) {
+    let state = shell.state();
+    let found = {
+        let mut docs = state.docs.lock().unwrap();
+        match docs.iter_mut().find(|d| d.id == doc_id) {
+            Some(d) => {
+                d.editing = editing;
+                d.dirty = dirty;
+                true
+            }
+            None => false,
+        }
+    };
+    if !found {
+        return;
+    }
+    sync_title(shell);
+    shell.refresh_menu();
+}
+
+/// 菜单 Edit Document（⌘E）：编辑器归前端，Rust 只转发给 active doc。
+pub fn request_toggle_edit<S: Shell>(shell: &S) {
+    let active = *shell.state().active.lock().unwrap();
+    if let Some(doc_id) = active {
+        shell.emit(Event::ToggleEdit(DocRefPayload { doc_id }));
+    }
+}
+
+/// 菜单 Save（⌘S）：让前端把编辑器文本交回 save_doc。
+pub fn request_save<S: Shell>(shell: &S) {
+    let active = *shell.state().active.lock().unwrap();
+    if let Some(doc_id) = active {
+        shell.emit(Event::SaveRequested(SaveRequestedPayload { doc_id, close_after: false }));
+    }
 }
 
 #[cfg(test)]
@@ -353,6 +559,18 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex};
 
+    /// 待应答的关闭确认框：测试手动调用 `answer` 模拟用户选择。
+    struct ClosePrompt {
+        title: String,
+        answer: Box<dyn FnOnce(CloseChoice) + Send>,
+    }
+
+    /// 待应答的退出确认框：只有"丢弃并退出"会回调。
+    struct QuitPrompt {
+        count: usize,
+        on_discard: Box<dyn FnOnce() + Send>,
+    }
+
     /// 记录一切宿主副作用的 fake：断言"编排层对宿主说了什么"。
     #[derive(Clone, Default)]
     struct Fake {
@@ -361,6 +579,9 @@ mod tests {
         titles: Arc<Mutex<Vec<String>>>,
         menu_refreshes: Arc<AtomicUsize>,
         recents: Arc<Mutex<Vec<PathBuf>>>,
+        close_prompts: Arc<Mutex<Vec<ClosePrompt>>>,
+        quit_prompts: Arc<Mutex<Vec<QuitPrompt>>>,
+        quits: Arc<AtomicUsize>,
     }
 
     impl Shell for Fake {
@@ -378,6 +599,25 @@ mod tests {
         }
         fn remember_recent(&self, path: &Path) {
             self.recents.lock().unwrap().push(path.to_path_buf());
+        }
+        fn confirm_close(
+            &self,
+            title: &str,
+            on_choice: Box<dyn FnOnce(CloseChoice) + Send + 'static>,
+        ) {
+            self.close_prompts.lock().unwrap().push(ClosePrompt {
+                title: title.to_string(),
+                answer: on_choice,
+            });
+        }
+        fn confirm_quit(&self, dirty_count: usize, on_discard: Box<dyn FnOnce() + Send + 'static>) {
+            self.quit_prompts.lock().unwrap().push(QuitPrompt {
+                count: dirty_count,
+                on_discard,
+            });
+        }
+        fn quit(&self) {
+            self.quits.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -411,13 +651,22 @@ mod tests {
                 .title
                 .clone()
         }
+        fn take_close_prompt(&self) -> Option<ClosePrompt> {
+            self.close_prompts.lock().unwrap().pop()
+        }
+        fn take_quit_prompt(&self) -> Option<QuitPrompt> {
+            self.quit_prompts.lock().unwrap().pop()
+        }
         /// 直接塞一个已打开的 doc（不起 watcher），供文件事件测试确定性使用
-        fn push_doc(&self, id: u64, path: &Path, title: &str) {
+        fn push_doc(&self, id: u64, path: &Path, title: &str, disk_hash: u64) {
             self.state.docs.lock().unwrap().push(OpenDoc {
                 id,
                 path: path.to_path_buf(),
                 title: title.to_string(),
                 watcher: None,
+                disk_hash,
+                dirty: false,
+                editing: false,
             });
         }
     }
@@ -681,8 +930,8 @@ mod tests {
         let a = md(dir.path(), "a.md", "# A");
         let b = md(dir.path(), "b.md", "# B");
         let sh = Fake::default();
-        sh.push_doc(1, &a, "A");
-        sh.push_doc(2, &b, "B");
+        sh.push_doc(1, &a, "A", 0);
+        sh.push_doc(2, &b, "B", 0);
         *sh.state.active.lock().unwrap() = Some(1);
 
         fs::write(&b, "# B2").unwrap();
@@ -716,7 +965,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = md(dir.path(), "a.md", "# A");
         let sh = Fake::default();
-        sh.push_doc(1, &a, "A");
+        sh.push_doc(1, &a, "A", 0);
         on_file_event(
             &sh,
             FileEvent {
@@ -833,8 +1082,293 @@ mod tests {
             path: canon_real,
             title: "t1".into(),
             watcher: None,
+            disk_hash: 0,
+            dirty: false,
+            editing: false,
         }];
         // 经符号链接打开同一文件：canonicalize 后判重命中
         assert_eq!(find_doc(&docs, &link.canonicalize().unwrap()), Some(1));
+    }
+
+    // ---- 载荷源码 / 块范围 / 回声判定 / 脏标记（Task 2）----
+
+    #[test]
+    fn own_save_echo_is_not_external() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A\n\nbody");
+        let sh = Fake::default();
+        // disk_hash 与文件内容一致 = 我们自己刚写进去的
+        sh.push_doc(1, &a.canonicalize().unwrap(), "A", content_hash(b"# A\n\nbody"));
+
+        on_file_event(
+            &sh,
+            FileEvent {
+                path: a.canonicalize().unwrap(),
+                kind: FileEventKind::Modified,
+            },
+        );
+
+        let evs = sh.events();
+        let Event::DocumentUpdated(p) = &evs[0] else {
+            panic!("expected document-updated")
+        };
+        assert!(!p.external);
+        assert_eq!(p.text, "# A\n\nbody");
+        assert_eq!(p.blocks.len(), 2);
+    }
+
+    #[test]
+    fn external_change_is_flagged_and_becomes_the_new_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A\n\nchanged outside");
+        let canon = a.canonicalize().unwrap();
+        let sh = Fake::default();
+        sh.push_doc(1, &canon, "A", content_hash(b"# A\n\nold"));
+
+        on_file_event(
+            &sh,
+            FileEvent {
+                path: canon.clone(),
+                kind: FileEventKind::Modified,
+            },
+        );
+        let Event::DocumentUpdated(p) = &sh.events()[0] else {
+            panic!()
+        };
+        assert!(p.external);
+
+        // 同一内容再来一次事件（编辑器二次 touch）：磁盘现值已是基线，不再算外部改动
+        on_file_event(
+            &sh,
+            FileEvent {
+                path: canon,
+                kind: FileEventKind::Modified,
+            },
+        );
+        let Event::DocumentUpdated(p2) = &sh.events()[1] else {
+            panic!()
+        };
+        assert!(!p2.external);
+    }
+
+    #[test]
+    fn opened_payload_carries_text_and_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A\n\nbody");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let evs = sh.events();
+        let p = opened(&evs[0]).unwrap();
+        assert_eq!(p.text, "# A\n\nbody");
+        assert_eq!(p.blocks.iter().map(|b| b.from).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(
+            sh.state.docs.lock().unwrap()[0].disk_hash,
+            content_hash(b"# A\n\nbody")
+        );
+    }
+
+    #[test]
+    fn dirty_doc_shows_a_marker_in_the_window_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let id = sh.ids()[0];
+        sh.state.docs.lock().unwrap()[0].dirty = true;
+        focus_doc(&sh, id);
+        assert_eq!(sh.titles().last().unwrap(), "● A");
+    }
+
+    // ---- render_markdown / save_doc / set_doc_state（Task 3）----
+
+    #[test]
+    fn save_doc_writes_the_file_clears_dirty_and_updates_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a.clone(), true).unwrap();
+        let id = sh.ids()[0];
+        set_doc_state(&sh, id, true, true);
+        assert_eq!(sh.titles().last().unwrap(), "● A");
+
+        save_doc(&sh, id, "# A\n\nsaved").unwrap();
+
+        assert_eq!(fs::read_to_string(&a).unwrap(), "# A\n\nsaved");
+        {
+            let docs = sh.state.docs.lock().unwrap();
+            assert!(!docs[0].dirty);
+            assert_eq!(docs[0].disk_hash, content_hash(b"# A\n\nsaved"));
+        }
+        assert_eq!(sh.titles().last().unwrap(), "A");
+    }
+
+    #[test]
+    fn save_doc_for_unknown_doc_is_an_error() {
+        let sh = Fake::default();
+        assert!(save_doc(&sh, 42, "x").is_err());
+    }
+
+    #[test]
+    fn render_markdown_rerenders_and_retitles_the_active_doc() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let id = sh.ids()[0];
+
+        let p = render_markdown(&sh, id, "# Renamed\n\n![](img.png)").unwrap();
+
+        assert_eq!(p.title, "Renamed");
+        assert_eq!(p.blocks.len(), 2);
+        assert!(p.html.contains("img.png")); // 相对图片路径按该文档目录改写
+        assert_eq!(sh.title_of(id), "Renamed");
+        assert_eq!(sh.titles().last().unwrap(), "Renamed");
+        assert!(render_markdown(&sh, 99, "x").is_err());
+    }
+
+    #[test]
+    fn set_doc_state_refreshes_menu_and_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let id = sh.ids()[0];
+        let before = sh.menu_refreshes.load(Ordering::SeqCst);
+
+        set_doc_state(&sh, id, true, false);
+
+        assert_eq!(sh.menu_refreshes.load(Ordering::SeqCst), before + 1);
+        let docs = sh.state.docs.lock().unwrap();
+        assert!(docs[0].editing);
+        assert!(!docs[0].dirty);
+    }
+
+    // ---- 脏文档关闭 / 退出守卫（Task 4）----
+
+    fn open_dirty(sh: &Fake, dir: &Path, name: &str) -> u64 {
+        let p = md(dir, name, "# A");
+        open_document(sh, p, true).unwrap();
+        let id = *sh.ids().last().unwrap();
+        set_doc_state(sh, id, true, true);
+        id
+    }
+
+    #[test]
+    fn closing_a_dirty_doc_prompts_and_cancel_keeps_it_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = Fake::default();
+        let id = open_dirty(&sh, dir.path(), "a.md");
+
+        close_doc(&sh, id);
+
+        assert_eq!(sh.ids(), vec![id]); // 未关闭，等用户选择
+        let prompt = sh.take_close_prompt().expect("prompted");
+        assert_eq!(prompt.title, "A");
+        (prompt.answer)(CloseChoice::Cancel);
+        assert_eq!(sh.ids(), vec![id]);
+        assert!(!sh.events().iter().any(|e| matches!(e, Event::DocumentClosed(_))));
+    }
+
+    #[test]
+    fn choosing_save_requests_a_save_that_closes_afterwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = Fake::default();
+        let id = open_dirty(&sh, dir.path(), "a.md");
+        close_doc(&sh, id);
+        (sh.take_close_prompt().unwrap().answer)(CloseChoice::Save);
+        assert_eq!(
+            sh.events().last(),
+            Some(&Event::SaveRequested(SaveRequestedPayload {
+                doc_id: id,
+                close_after: true
+            }))
+        );
+        assert_eq!(sh.ids(), vec![id]); // 关闭由前端保存后再次调用 close_doc 完成
+    }
+
+    #[test]
+    fn choosing_discard_closes_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = Fake::default();
+        let id = open_dirty(&sh, dir.path(), "a.md");
+        close_doc(&sh, id);
+        (sh.take_close_prompt().unwrap().answer)(CloseChoice::Discard);
+        assert!(sh.ids().is_empty());
+        assert!(matches!(sh.events().last(), Some(Event::DocumentClosed(_))));
+    }
+
+    #[test]
+    fn a_clean_doc_closes_without_prompting() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        close_doc(&sh, sh.ids()[0]);
+        assert!(sh.ids().is_empty());
+        assert!(sh.take_close_prompt().is_none());
+    }
+
+    #[test]
+    fn request_quit_prompts_when_dirty_and_discard_quits() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = Fake::default();
+        open_dirty(&sh, dir.path(), "a.md");
+        let b = md(dir.path(), "b.md", "# B");
+        open_document(&sh, b, false).unwrap();
+
+        assert!(request_quit(&sh));
+        let prompt = sh.take_quit_prompt().expect("prompted");
+        assert_eq!(prompt.count, 1);
+        assert_eq!(sh.quits.load(Ordering::SeqCst), 0);
+
+        (prompt.on_discard)();
+        assert!(!any_dirty(&sh));
+        assert_eq!(sh.quits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn request_quit_without_dirty_docs_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        assert!(!request_quit(&sh));
+        assert!(sh.take_quit_prompt().is_none());
+    }
+
+    // ---- 菜单转发（Task 5）----
+
+    #[test]
+    fn toggle_edit_and_save_menu_target_the_active_doc() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let b = md(dir.path(), "b.md", "# B");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        open_document(&sh, b, true).unwrap();
+        let id_b = sh.ids()[1];
+
+        request_toggle_edit(&sh);
+        assert_eq!(
+            sh.events().last(),
+            Some(&Event::ToggleEdit(DocRefPayload { doc_id: id_b }))
+        );
+
+        request_save(&sh);
+        assert_eq!(
+            sh.events().last(),
+            Some(&Event::SaveRequested(SaveRequestedPayload {
+                doc_id: id_b,
+                close_after: false
+            }))
+        );
+    }
+
+    #[test]
+    fn toggle_edit_and_save_without_docs_are_noops() {
+        let sh = Fake::default();
+        request_toggle_edit(&sh);
+        request_save(&sh);
+        assert!(sh.events().is_empty());
     }
 }
