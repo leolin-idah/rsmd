@@ -35,6 +35,11 @@ pub fn update_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) {
     rebuild_menu(app);
 }
 
+/// 应用菜单 Settings…（⌘,）：只是转成事件，面板的开合状态归前端 store。
+pub fn open_settings(app: &AppHandle) {
+    Shell::emit(app, Event::OpenSettings);
+}
+
 /// Install 'md' Command 菜单项：把启动脚本写入 ~/.local/bin，结果弹窗反馈。
 /// `tauri dev` 跑裸二进制时找不到 .app，脚本退化为仅按 bundle id 解析。
 pub fn install_cli(app: &AppHandle) {

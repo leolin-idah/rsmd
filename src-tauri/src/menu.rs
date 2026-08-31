@@ -2,7 +2,6 @@
 //! 菜单项 id 的分发在 `lib.rs`（组合根），变更类动作在 `shell.rs` / `session.rs`。
 
 use crate::session::AppState;
-use crate::settings::{Layout, TocSide};
 use std::path::PathBuf;
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
@@ -34,12 +33,15 @@ pub fn build_menu(
         .find(|d| Some(d.id) == active)
         .map(|d| (d.editing, d.dirty))
         .unwrap_or((false, false));
-    let settings = *state.settings.lock().unwrap();
-    let layout = settings.layout;
-    let toc_side = settings.toc_side;
 
     let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
+    // 所有显示设置都在面板里（View 菜单已移除）；Settings… 放应用菜单、⌘, 是 macOS 惯例
+    let settings_item = MenuItemBuilder::with_id("settings", "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "rsmd")
+        .item(&settings_item)
+        .separator()
         .item(&install_cli)
         .separator()
         // 不能用 PredefinedMenuItem::quit：它直接向 NSApp 发 terminate:，tao 没有 applicationShouldTerminate，
@@ -91,36 +93,6 @@ pub fn build_menu(
         .item(&save)
         .build()?;
 
-    let layout_tabs = CheckMenuItemBuilder::with_id("layout:tabs", "Tabs")
-        .checked(layout == Layout::Tabs)
-        .build(app)?;
-    let layout_side = CheckMenuItemBuilder::with_id("layout:sideList", "Side List")
-        .checked(layout == Layout::SideList)
-        .build(app)?;
-    let toc_show = CheckMenuItemBuilder::with_id("toggle-toc", "Show")
-        .accelerator("Alt+CmdOrCtrl+T")
-        .checked(settings.toc)
-        .build(app)?;
-    // TOC 隐藏时位置无从谈起，置灰而非默默失效
-    let toc_left = CheckMenuItemBuilder::with_id("toc-side:left", "Left")
-        .checked(toc_side == TocSide::Left)
-        .enabled(settings.toc)
-        .build(app)?;
-    let toc_right = CheckMenuItemBuilder::with_id("toc-side:right", "Right")
-        .checked(toc_side == TocSide::Right)
-        .enabled(settings.toc)
-        .build(app)?;
-    let toc_menu = SubmenuBuilder::new(app, "Table of Contents")
-        .item(&toc_show)
-        .separator()
-        .item(&toc_left)
-        .item(&toc_right)
-        .build()?;
-    let view_menu = SubmenuBuilder::new(app, "View")
-        .item(&SubmenuBuilder::new(app, "Layout").item(&layout_tabs).item(&layout_side).build()?)
-        .item(&toc_menu)
-        .build()?;
-
     // ⌘W 必须走菜单（macOS 强语义 + 焦点不在 webview 时 keydown 收不到）；
     // 无 tab 时 disable，避免误触系统默认行为
     let close_tab = MenuItemBuilder::with_id("close-tab", "Close Tab")
@@ -157,6 +129,6 @@ pub fn build_menu(
     }
 
     MenuBuilder::new(app)
-        .items(&[&app_menu, &edit_menu, &file_menu, &view_menu, &window_menu.build()?])
+        .items(&[&app_menu, &edit_menu, &file_menu, &window_menu.build()?])
         .build()
 }

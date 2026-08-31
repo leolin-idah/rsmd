@@ -77,6 +77,8 @@ pub enum Event {
     OpenError(String),
     ToggleEdit(DocRefPayload),
     SaveRequested(SaveRequestedPayload),
+    /// 应用菜单 Settings…（⌘,）：让前端打开设置面板；无载荷
+    OpenSettings,
 }
 
 impl Event {
@@ -92,6 +94,7 @@ impl Event {
             Event::OpenError(_) => "open-error",
             Event::ToggleEdit(_) => "toggle-edit",
             Event::SaveRequested(_) => "save-requested",
+            Event::OpenSettings => "open-settings",
         }
     }
 
@@ -108,6 +111,18 @@ impl Event {
             Event::OpenError(msg) => app.emit(name, msg),
             Event::ToggleEdit(p) => app.emit(name, p),
             Event::SaveRequested(p) => app.emit(name, p),
+            Event::OpenSettings => app.emit(name, ()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_settings_event_name_matches_frontend_listener() {
+        // 前端 src/ipc.ts 的 Events 表用这个字面量注册监听
+        assert_eq!(Event::OpenSettings.name(), "open-settings");
     }
 }

@@ -23,12 +23,14 @@ interface Palette {
 
 /// 露出源码的段与 widget 共处一列：字体/字号/行高/列宽对齐 github-markdown-css 正文，切换读写时版面不跳。
 /// .cm-content 以 flex 项居中：宽度上限 860px，与原 .markdown-body 一致。
+/// min-width 必须显式置 0：flex 项默认 min-width: auto，不肯收缩到子块（宽表格、长行代码）的最小内容宽度以下，
+/// 窄窗口时整列撑破 .cm-scroller 出横向滚动条，还因居中而左右同时被裁；置 0 后各块在自身的 overflow: auto 内横滚。
 function base(p: Palette, dark: boolean): Extension {
   return EditorView.theme(
     {
       "&": { backgroundColor: p.bg, color: p.fg, height: "100%" },
       ".cm-scroller": { overflow: "auto", justifyContent: "center", fontFamily: FONT, fontSize: "16px", lineHeight: "1.5" },
-      ".cm-content": { flex: "0 1 860px", maxWidth: "860px", boxSizing: "border-box", padding: "32px 24px", caretColor: p.fg },
+      ".cm-content": { flex: "0 1 860px", minWidth: "0", maxWidth: "860px", boxSizing: "border-box", padding: "32px 24px", caretColor: p.fg },
       "&.cm-focused": { outline: "none" },
       ".cm-line": { padding: "0" },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: p.fg },

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { DocId } from "./ipc";
+import type { DocId, Settings } from "./ipc";
 
 export interface TabInfo {
   docId: DocId;
@@ -29,6 +29,10 @@ export interface ShellState {
   dirty: Readonly<Record<DocId, boolean>>; // 编辑器有未保存改动 → tab ●
   editing: Readonly<Record<DocId, boolean>>; // 处于编辑态（链接需 ⌘+点击）
   conflicts: Readonly<Record<DocId, boolean>>; // 编辑中收到外部改动，等 Reload
+  // Rust Settings 的投影：null = 握手前尚未收到。面板改值本地先行写这里，
+  // body.dataset 的 DOM 投影订阅本字段（settings/projection.ts），Rust 回声幂等
+  settings: Settings | null;
+  settingsOpen: boolean; // Settings 面板是否打开（open-settings 事件 / Esc / ✕）
 
   addDoc(meta: DocMeta, activate: boolean): void;
   removeDoc(docId: DocId, nextActive: DocId | null): void;
@@ -39,6 +43,9 @@ export interface ShellState {
   setDirty(docId: DocId, dirty: boolean): void;
   setEditing(docId: DocId, editing: boolean): void;
   setConflict(docId: DocId, conflict: boolean): void;
+  setSettings(settings: Settings): void;
+  openSettings(): void;
+  closeSettings(): void;
 }
 
 type FlagKey = "dirty" | "editing" | "conflicts";
@@ -63,6 +70,11 @@ function without<T>(table: Readonly<Record<DocId, T>>, docId: DocId): Record<Doc
   const next = { ...table };
   delete next[docId];
   return next;
+}
+
+/// Settings 是扁平的原始值对象：逐键比较，新增字段无需改这里
+function sameSettings(a: Settings, b: Settings): boolean {
+  return (Object.keys(b) as (keyof Settings)[]).every((k) => a[k] === b[k]);
 }
 
 /// 标签消歧：默认 fileName；重名时从路径末尾向前逐段追加（docs/README.md），
@@ -107,6 +119,8 @@ export const useShellStore = create<ShellState>()(
     dirty: {},
     editing: {},
     conflicts: {},
+    settings: null,
+    settingsOpen: false,
 
     // 成功打开（含聚焦已打开的）即撕掉上一次的全局错误横幅
     addDoc(meta, activate) {
@@ -172,6 +186,15 @@ export const useShellStore = create<ShellState>()(
     },
     setConflict(docId, conflict) {
       set((s) => setFlag(s, "conflicts", docId, conflict));
+    },
+    setSettings(settings) {
+      set((s) => (s.settings !== null && sameSettings(s.settings, settings) ? s : { settings }));
+    },
+    openSettings() {
+      set((s) => (s.settingsOpen ? s : { settingsOpen: true }));
+    },
+    closeSettings() {
+      set((s) => (s.settingsOpen ? { settingsOpen: false } : s));
     },
   }))
 );

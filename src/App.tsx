@@ -1,6 +1,7 @@
 import { PreviewPane } from "./preview/PreviewPane";
 import { reloadFromDisk } from "./preview/document";
 import { TabBar } from "./TabBar";
+import { SettingsPanel } from "./settings/SettingsPanel";
 import { useShallow } from "zustand/react/shallow";
 import { selectBanner, useShellStore } from "./store";
 
@@ -12,6 +13,7 @@ export default function App() {
   const active = useShellStore((s) => s.active);
   // selectBanner 每次返回新对象：不做浅比较 useSyncExternalStore 会判定快照不稳定而无限重渲
   const banner = useShellStore(useShallow(selectBanner));
+  const settingsOpen = useShellStore((s) => s.settingsOpen);
 
   return (
     <div id="shell">
@@ -32,6 +34,7 @@ export default function App() {
         )}
         <PreviewPane />
       </div>
+      {settingsOpen && <SettingsPanel />}
     </div>
   );
 }

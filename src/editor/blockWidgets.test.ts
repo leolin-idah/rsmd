@@ -79,6 +79,22 @@ function keydown(view: EditorView, key: string): void {
   view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
 }
 
+/// jsdom 没有 caretRangeFromPoint：临时装一个总是返回 (node, offset) 的实现，模拟浏览器按坐标算出的插入点
+function withCaret(node: Node, offset: number, run: () => void): void {
+  const d = document as unknown as { caretRangeFromPoint?: (x: number, y: number) => Range | null };
+  d.caretRangeFromPoint = () => {
+    const r = document.createRange();
+    r.setStart(node, offset);
+    r.collapse(true);
+    return r;
+  };
+  try {
+    run();
+  } finally {
+    delete d.caretRangeFromPoint;
+  }
+}
+
 afterEach(() => {
   for (const v of views.splice(0)) {
     v.destroy();
@@ -325,6 +341,37 @@ describe("click to reveal", () => {
     const link = view.contentDOM.querySelector<HTMLElement>(".rsmd-block a")!;
     mousedown(link);
     expect(view.state.selection.main.head).toBe(5);
+  });
+
+  it("puts the cursor at the clicked character when the platform reports a caret position", () => {
+    const model: BlockModel = {
+      segments: [
+        { fromLine: 1, toLine: 2, kind: "node", html: '<h1 data-sourcepos="1:1-1:3">T</h1>' },
+        { fromLine: 3, toLine: 4, kind: "node", html: '<p data-sourcepos="3:1-3:4">para</p>' },
+        {
+          fromLine: 5,
+          toLine: 7,
+          kind: "node",
+          html: '<ul data-sourcepos="5:1-6:3"><li data-sourcepos="5:1-5:3">a</li><li data-sourcepos="6:1-6:3">b</li></ul>',
+        },
+      ],
+      footnotesHtml: null,
+    };
+    const view = makeView(true, 0, model);
+    const li = view.contentDOM.querySelectorAll<HTMLElement>(".rsmd-block li")[1];
+    withCaret(li.firstChild!, 1, () => mousedown(li, { clientX: 40, clientY: 90 }));
+    expect(view.state.selection.main.head).toBe(18); // 第 6 行 "- b" 的 b 之后
+  });
+
+  it("keeps the footnotes trailer's old behaviour: cursor at the end of the document", () => {
+    const model: BlockModel = {
+      segments: SEGS,
+      footnotesHtml: '<section data-sourcepos="7:1-7:0" class="footnotes"><ol><li id="fn-1"><p>note</p></li></ol></section>',
+    };
+    const view = makeView(true, 0, model);
+    const p = view.contentDOM.querySelector<HTMLElement>(".footnotes p")!;
+    withCaret(p.firstChild!, 2, () => mousedown(p));
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
   });
 
   it("ignores a mousedown on bare source text (CM keeps handling it)", () => {

@@ -17,7 +17,7 @@ const ipc = vi.hoisted(() => {
       return () => {};
     }),
     getSettings: vi.fn(
-      async (): Promise<Settings> => ({ layout: "sideList", toc: false, tocSide: "left" })
+      async (): Promise<Settings> => ({ layout: "sideList", toc: false, tocSide: "left", wrapCode: true })
     ),
     frontendReady: vi.fn(async () => {}),
     openPaths: vi.fn(async (_paths: string[]) => {}),
@@ -62,6 +62,7 @@ describe("initTauriBridge", () => {
       dirty: {},
       editing: {},
       conflicts: {},
+      settingsOpen: false,
     });
     lifecycle.openDoc.mockClear();
     lifecycle.updateDoc.mockClear();
@@ -80,17 +81,27 @@ describe("initTauriBridge", () => {
     expect(ipc.frontendReady.mock.invocationCallOrder[0]).toBeGreaterThan(lastListen);
   });
 
-  it("applies the initial settings to body data attributes verbatim", () => {
+  it("feeds the initial settings into the store and onto body data attributes", () => {
+    expect(s().settings).toEqual({ layout: "sideList", toc: false, tocSide: "left", wrapCode: true });
     expect(document.body.dataset.layout).toBe("sideList");
     expect(document.body.dataset.toc).toBe("off");
     expect(document.body.dataset.tocSide).toBe("left");
+    expect(document.body.dataset.wrapCode).toBe("on");
   });
 
-  it("re-applies settings on settings-changed", () => {
-    fire("settings-changed", { layout: "tabs", toc: true, tocSide: "right" });
+  it("re-applies settings on settings-changed via the store", () => {
+    const next = { layout: "tabs", toc: true, tocSide: "right", wrapCode: false } as const;
+    fire("settings-changed", next);
+    expect(s().settings).toEqual(next);
     expect(document.body.dataset.layout).toBe("tabs");
     expect(document.body.dataset.toc).toBe("on");
     expect(document.body.dataset.tocSide).toBe("right");
+    expect(document.body.dataset.wrapCode).toBe("off");
+  });
+
+  it("open-settings opens the panel", () => {
+    fire("open-settings", null);
+    expect(s().settingsOpen).toBe(true);
   });
 
   it("document-opened hands the payload to the lifecycle", () => {

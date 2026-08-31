@@ -24,11 +24,17 @@ pub struct Settings {
     pub layout: Layout,
     pub toc: bool,
     pub toc_side: TocSide,
+    pub wrap_code: bool, // 代码块换行显示而非块内横滚（View → Wrap Code Lines）
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { layout: Layout::default(), toc: true, toc_side: TocSide::default() }
+        Self {
+            layout: Layout::default(),
+            toc: true,
+            toc_side: TocSide::default(),
+            wrap_code: false,
+        }
     }
 }
 
@@ -64,7 +70,12 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { layout: Layout::SideList, toc: true, toc_side: TocSide::Right };
+        let s = Settings {
+            layout: Layout::SideList,
+            toc: true,
+            toc_side: TocSide::Right,
+            wrap_code: false,
+        };
         save(dir.path(), &s);
         assert_eq!(load(dir.path()), s);
     }
@@ -101,7 +112,12 @@ mod tests {
     #[test]
     fn toc_off_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { layout: Layout::Tabs, toc: false, toc_side: TocSide::Right };
+        let s = Settings {
+            layout: Layout::Tabs,
+            toc: false,
+            toc_side: TocSide::Right,
+            wrap_code: false,
+        };
         save(dir.path(), &s);
         assert_eq!(load(dir.path()), s);
     }
@@ -125,8 +141,46 @@ mod tests {
     #[test]
     fn toc_side_left_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { layout: Layout::Tabs, toc: true, toc_side: TocSide::Left };
+        let s = Settings {
+            layout: Layout::Tabs,
+            toc: true,
+            toc_side: TocSide::Left,
+            wrap_code: false,
+        };
         save(dir.path(), &s);
         assert_eq!(load(dir.path()), s);
+    }
+
+    #[test]
+    fn wrap_code_defaults_to_off() {
+        assert!(!Settings::default().wrap_code);
+    }
+
+    #[test]
+    fn missing_wrap_code_field_defaults_to_off() {
+        // 旧版本写出的 settings.json 没有 wrapCode 字段
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"layout":"tabs","toc":true,"tocSide":"left"}"#,
+        )
+        .unwrap();
+        let s = load(dir.path());
+        assert_eq!(s.toc_side, TocSide::Left);
+        assert!(!s.wrap_code);
+    }
+
+    #[test]
+    fn wrap_code_on_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Settings { wrap_code: true, ..Settings::default() };
+        save(dir.path(), &s);
+        assert_eq!(load(dir.path()), s);
+    }
+
+    #[test]
+    fn wrap_code_serializes_as_camel_case_for_the_frontend() {
+        let s = Settings { wrap_code: true, ..Settings::default() };
+        assert!(serde_json::to_string(&s).unwrap().contains(r#""wrapCode":true"#));
     }
 }

@@ -45,6 +45,8 @@ describe("App shell", () => {
       dirty: {},
       editing: {},
       conflicts: {},
+      settings: null,
+      settingsOpen: false,
     });
     vi.clearAllMocks();
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -184,5 +186,15 @@ describe("App shell", () => {
     s().setDirty(2, false);
     await settle();
     expect(container.querySelector(".tab-dirty")).toBeNull();
+  });
+
+  it("shows the settings panel while the store says it is open", async () => {
+    s().setSettings({ layout: "tabs", toc: true, tocSide: "right", wrapCode: false });
+    s().openSettings();
+    await settle();
+    expect(container.querySelector(".settings-panel")).not.toBeNull();
+    s().closeSettings();
+    await settle();
+    expect(container.querySelector(".settings-panel")).toBeNull();
   });
 });

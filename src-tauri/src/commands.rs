@@ -3,6 +3,7 @@
 
 use crate::ipc::RenderPayload;
 use crate::session::{self, AppState};
+use crate::shell;
 use crate::settings::Settings;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
@@ -62,4 +63,11 @@ pub fn save_doc(app: AppHandle, doc_id: u64, text: String) -> Result<(), String>
 pub fn set_doc_state(app: AppHandle, doc_id: u64, editing: bool, dirty: bool) -> Result<(), String> {
     session::set_doc_state(&app, doc_id, editing, dirty);
     Ok(())
+}
+
+/// Settings 面板整体写回：与逐项修改走同一条路径（落盘 → settings-changed → 重建菜单），
+/// 前端本地先行后由回声确认。
+#[tauri::command]
+pub fn set_settings(app: AppHandle, settings: Settings) {
+    shell::update_settings(&app, |s| *s = settings);
 }

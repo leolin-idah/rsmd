@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { Settings } from "./ipc";
 import { disambiguate, selectBanner, useShellStore } from "./store";
 
 const meta = (docId: number, path = `/x/${docId}.md`) => ({
@@ -238,5 +239,47 @@ describe("shell store", () => {
       s().setActive(1);
       expect(selectBanner(s())?.action).toBe("reload");
     });
+  });
+});
+
+describe("settings slice", () => {
+  const s = () => useShellStore.getState();
+  const base: Settings = { layout: "tabs", toc: true, tocSide: "right", wrapCode: false };
+
+  beforeEach(() => {
+    useShellStore.setState({ settings: null, settingsOpen: false });
+  });
+
+  it("starts without settings and with the panel closed", () => {
+    expect(useShellStore.getInitialState().settings).toBeNull();
+    expect(useShellStore.getInitialState().settingsOpen).toBe(false);
+  });
+
+  it("stores the settings projection", () => {
+    s().setSettings(base);
+    expect(s().settings).toEqual(base);
+  });
+
+  it("keeps the same object when every field is unchanged (subscribers stay quiet)", () => {
+    s().setSettings(base);
+    const before = s().settings;
+    s().setSettings({ ...base });
+    expect(s().settings).toBe(before);
+  });
+
+  it("replaces the object when any field changes", () => {
+    s().setSettings(base);
+    s().setSettings({ ...base, wrapCode: true });
+    expect(s().settings).toEqual({ ...base, wrapCode: true });
+  });
+
+  it("openSettings / closeSettings toggle the panel flag idempotently", () => {
+    s().openSettings();
+    expect(s().settingsOpen).toBe(true);
+    const openState = s();
+    s().openSettings();
+    expect(s()).toBe(openState); // 重复打开不产生新 state
+    s().closeSettings();
+    expect(s().settingsOpen).toBe(false);
   });
 });

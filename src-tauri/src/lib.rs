@@ -13,7 +13,6 @@ pub mod shell;
 pub mod watcher;
 
 use session::AppState;
-use settings::{Layout, TocSide};
 use std::path::PathBuf;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
@@ -87,11 +86,7 @@ pub fn run() {
                 "close-tab" => session::close_active(app),
                 "next-tab" => session::cycle(app, 1),
                 "prev-tab" => session::cycle(app, -1),
-                "layout:tabs" => shell::update_settings(app, |s| s.layout = Layout::Tabs),
-                "layout:sideList" => shell::update_settings(app, |s| s.layout = Layout::SideList),
-                "toggle-toc" => shell::update_settings(app, |s| s.toc = !s.toc),
-                "toc-side:left" => shell::update_settings(app, |s| s.toc_side = TocSide::Left),
-                "toc-side:right" => shell::update_settings(app, |s| s.toc_side = TocSide::Right),
+                "settings" => shell::open_settings(app),
                 _ => {
                     if let Some(idx) = id.strip_prefix("recent:")
                         && let Ok(i) = idx.parse::<usize>()
@@ -118,7 +113,8 @@ pub fn run() {
             commands::frontend_ready,
             commands::render_markdown,
             commands::save_doc,
-            commands::set_doc_state
+            commands::set_doc_state,
+            commands::set_settings
         ])
         .on_window_event(|window, event| {
             // 红点关窗：有脏文档先问；用户选丢弃后 session 调 app.exit，再次进入时不再脏

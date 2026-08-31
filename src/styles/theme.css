@@ -252,6 +252,19 @@ body[data-layout="tabs"] .tab {
 
 /* ---- TOC：pane 内侧边列，滚动跟随高亮 ---- */
 
+/* pane 是容器查询的容器：宽度不足 720px（TOC 220 + 正文至少 500）时自动隐藏 TOC。
+   以 pane 而非视口为准——side-list 布局下左侧 220px 列表已被扣除，判断才准确。
+   inline-size 包含只影响 pane 自身的内联尺寸计算，它的宽度本来就由 #panes/#main 的 flex 决定 */
+.pane {
+  container-type: inline-size;
+}
+
+@container (max-width: 719px) {
+  nav.toc {
+    display: none;
+  }
+}
+
 nav.toc {
   flex: none;
   width: 220px;
@@ -365,6 +378,21 @@ body[data-toc-side="left"] nav.toc {
   }
 }
 
+/* KaTeX 块级公式是 white-space: nowrap 且不带溢出处理，长公式会溢出块外，
+   把 .cm-scroller 重新撑出横向滚动条；改为在公式自身内部横滚（KaTeX 官方建议写法） */
+.katex-display {
+  overflow: auto hidden;
+}
+
+/* View → Wrap Code Lines：代码块改为换行而非块内横滚（默认关，保持 GitHub 原样）。
+   github-markdown-css 给 pre > code 定了 white-space: pre，要一起覆盖；
+   overflow-wrap: anywhere 让超长 token 也能断开。表格/公式无法换行，仍是块内滚动 */
+body[data-wrap-code="on"] .cm-content .markdown-body pre,
+body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Shiki 双主题：暗色下切换到 --shiki-dark 变量 */
 @media (prefers-color-scheme: dark) {
   .shiki,
@@ -393,5 +421,143 @@ body[data-toc-side="left"] nav.toc {
   .enhance-error {
     background: #490202;
     color: #ff8182;
+  }
+}
+
+/* ---- Settings 面板：固定定位遮罩 + 居中卡片。z-index 要压过 #tablist(1)；
+   配色与 tab 条同源（github 变量只在 .markdown-body 上，这里显式给亮/暗值） ---- */
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.settings-panel {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 16px 20px 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f2328;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-close {
+  border: 0;
+  padding: 0 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.settings-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.settings-group {
+  padding: 10px 0;
+  border-top: 1px solid #d8dee4;
+}
+
+.settings-group h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #57606a;
+}
+
+.settings-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.settings-group input {
+  margin: 0;
+}
+
+.settings-inline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 0 3px 24px; /* 与上方复选框文字对齐 */
+}
+
+.settings-inline[aria-disabled="true"] {
+  color: #8c959f;
+}
+
+.settings-hint,
+.settings-footer {
+  margin: 4px 0 0 24px;
+  font-size: 12px;
+  color: #6e7781;
+}
+
+.settings-footer {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid #d8dee4;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .settings-panel {
+    border-color: #30363d;
+    background: #161b22;
+    color: #e6edf3;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  }
+
+  .settings-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .settings-group,
+  .settings-footer {
+    border-color: #30363d;
+  }
+
+  .settings-group h3 {
+    color: #8b949e;
+  }
+
+  .settings-inline[aria-disabled="true"] {
+    color: #6e7681;
+  }
+
+  .settings-hint,
+  .settings-footer {
+    color: #8b949e;
   }
 }

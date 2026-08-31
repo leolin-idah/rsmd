@@ -12,6 +12,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type Decoration
 import type { BlockKind } from "../ipc";
 import { enhance } from "../preview/enhance";
 import type { Segment } from "./blocks";
+import { caretAt, clickPosition } from "./clickPos";
 
 export interface BlockModel {
   segments: Segment[];
@@ -163,18 +164,30 @@ export function buildDecorations(state: EditorState, cache: WidgetCache): Decora
   return Decoration.set(ranges, true);
 }
 
-/// 编辑态点击渲染块 → 光标移到该块首行（该块随之露出源码）。⌘+点击块内链接留给 links.ts 跟随。
+/// 编辑态点击渲染块 → 光标移到点击处对应的源码位置（该块随之露出源码）。⌘+点击块内链接留给 links.ts 跟随。
 function revealOnMousedown(e: MouseEvent, view: EditorView): boolean {
   if (!view.state.facet(EditorView.editable)) return false;
   const target = e.target as Element | null;
   const block = target?.closest(".rsmd-block");
   if (!block) return false;
   if (e.metaKey && target?.closest("a")) return false;
-  const pos = view.posAtDOM(block);
-  view.dispatch({ selection: { anchor: pos } });
+  view.dispatch({ selection: { anchor: clickedPosition(view, block, e) } });
   view.focus();
   e.preventDefault();
   return true;
+}
+
+/// 点击处的源码位置：浏览器给得出插入点时按 sourcepos + 文本对位精确到字（clickPos.ts），否则退到块首
+function clickedPosition(view: EditorView, block: Element, e: MouseEvent): number {
+  const start = view.posAtDOM(block);
+  // 脚注 trailer 挂在文末，源码行却在别处（kind=footnote 的隐藏段）：没有可对位的段，保持落到文末
+  if (block.firstElementChild?.classList.contains("footnotes")) return start;
+  const caret = caretAt(e.clientX, e.clientY);
+  if (!caret) return start;
+  const segs = view.state.field(blocksField).segments;
+  const i = segmentIndexAt(segs, start);
+  if (i < 0) return start;
+  return clickPosition({ block, caret, doc: view.state.doc, seg: segs[i], first: i === 0 });
 }
 
 /// 编辑态点击渲染块 → 光标移到该块首行。必须用原生 DOM 监听而不是 EditorView.domEventHandlers：

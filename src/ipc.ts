@@ -15,6 +15,7 @@ export interface Settings {
   layout: Layout;
   toc: boolean;
   tocSide: TocSide;
+  wrapCode: boolean; // 代码块换行显示，而非块内横滚
 }
 
 export type BlockKind = "node" | "html" | "footnote";
@@ -82,6 +83,8 @@ export interface Events {
   "open-error": string;
   "toggle-edit": DocRefPayload;
   "save-requested": SaveRequestedPayload;
+  // 应用菜单 Settings…（⌘,）：无载荷
+  "open-settings": null;
 }
 
 export function on<K extends keyof Events>(
@@ -113,6 +116,10 @@ export const activateRelative = (offset: 1 | -1): Promise<void> =>
   invoke("activate_relative", { offset });
 
 export const getSettings = (): Promise<Settings> => invoke<Settings>("get_settings");
+
+/// Settings 面板整体写回；Rust 落盘后以 settings-changed 回声确认
+export const setSettings = (settings: Settings): Promise<void> =>
+  invoke("set_settings", { settings });
 
 export const frontendReady = (): Promise<void> => invoke("frontend_ready");
 
