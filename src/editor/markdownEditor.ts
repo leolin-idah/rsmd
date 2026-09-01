@@ -2,11 +2,11 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { diff } from "@codemirror/merge";
-import { Compartment, EditorState, Transaction, type Text } from "@codemirror/state";
+import { Compartment, EditorState, Transaction, type Extension, type Text } from "@codemirror/state";
 import { EditorView, drawSelection, keymap } from "@codemirror/view";
-import type { BlockRange, RenderPayload } from "../ipc";
+import type { BlockRange, DocMode, RenderPayload } from "../ipc";
 import { segment, splitBlocks, type Heading } from "./blocks";
-import { blockWidgets, pruneCache, setBlocks, type WidgetCache } from "./blockWidgets";
+import { blockWidgets, pruneCache, setBlocks, widgetsVisible, type WidgetCache } from "./blockWidgets";
 import { externalSync, renderBridge } from "./renderBridge";
 import { prefersDark, themeFor } from "./theme";
 
@@ -22,8 +22,8 @@ export interface EditorOptions {
 
 export interface EditorHandle {
   readonly view: EditorView;
-  beginEditing(): void;
-  endEditing(): Promise<void>;
+  /// 三态切换；切到 preview 会先等一轮渲染（blocks 追上最新文本）再锁定
+  setMode(mode: DocMode): Promise<void>;
   isReadOnly(): boolean;
   getText(): string;
   isDirty(): boolean;
@@ -37,13 +37,21 @@ export interface EditorHandle {
 /// 每个文档一个实例：光标、撤销栈、滚动位置都在实例里，切 tab 不丢。
 export function createEditor(opts: EditorOptions): EditorHandle {
   const cache: WidgetCache = new Map();
-  const access = new Compartment(); // readOnly + editable 一起切
+  const access = new Compartment(); // readOnly + editable + widget 显隐随模式一起切
   const theme = new Compartment();
   let headings: Heading[] = [];
   let savedDoc: Text | null = null; // 已保存基线；dirty = doc 与之不等
   let dirty = false;
   let syncing = false; // applyExternal 期间抑制脏判定
-  let accessGen = 0; // beginEditing/endEditing 每次自增；endEditing 等待渲染期间若被 beginEditing 抢先，放弃回锁
+  let mode: DocMode = "preview";
+  let accessGen = 0; // setMode 每次自增；切回 preview 等待渲染期间若被再次切换抢先，放弃回锁
+
+  // preview 只读全 widget；live 可编辑、widget 盖住非光标段；source 可编辑、无 widget
+  const confFor = (m: DocMode): Extension => [
+    EditorState.readOnly.of(m === "preview"),
+    EditorView.editable.of(m !== "preview"),
+    widgetsVisible.of(m !== "source"),
+  ];
 
   const applyBlocks = (view: EditorView, html: string, blocks: BlockRange[]): void => {
     const split = splitBlocks(html, blocks);
@@ -71,7 +79,7 @@ export function createEditor(opts: EditorOptions): EditorHandle {
       keymap.of([...defaultKeymap, ...historyKeymap]),
       markdown({ codeLanguages: languages }),
       EditorView.lineWrapping,
-      access.of([EditorState.readOnly.of(true), EditorView.editable.of(false)]),
+      access.of(confFor("preview")),
       theme.of(themeFor(prefersDark())),
       blockWidgets(cache),
       bridge,
@@ -89,24 +97,27 @@ export function createEditor(opts: EditorOptions): EditorHandle {
   const onScheme = (e: MediaQueryListEvent): void => view.dispatch({ effects: theme.reconfigure(themeFor(e.matches)) });
   media?.addEventListener("change", onScheme);
 
-  const setAccess = (readOnly: boolean): void =>
-    view.dispatch({ effects: access.reconfigure([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]) });
-
   return {
     view,
-    beginEditing() {
-      accessGen++;
-      setAccess(false);
-      // 光标落到视口首行：该段露出源码，用户看到的就是刚才在看的位置
-      const top = view.state.doc.lineAt(view.viewport.from).from;
-      view.dispatch({ selection: { anchor: top } });
-      view.focus();
-    },
-    async endEditing() {
+    async setMode(next) {
+      if (next === mode) return;
+      const from = mode;
+      mode = next;
       const gen = ++accessGen;
-      await (view.plugin(bridge)?.renderNow() ?? Promise.resolve());
-      if (gen !== accessGen) return; // 期间又进入了编辑态：保持可编辑
-      setAccess(true);
+      if (next === "preview") {
+        // 先等一轮渲染再锁定，否则最后的输入还没变成 widget
+        await (view.plugin(bridge)?.renderNow() ?? Promise.resolve());
+        if (gen !== accessGen) return; // 期间又切了模式：保持后来者
+        view.dispatch({ effects: access.reconfigure(confFor("preview")) });
+        return;
+      }
+      view.dispatch({ effects: access.reconfigure(confFor(next)) });
+      if (from === "preview") {
+        // 从 preview 进入编辑：光标落到视口首行，用户看到的就是刚才在看的位置
+        const top = view.state.doc.lineAt(view.viewport.from).from;
+        view.dispatch({ selection: { anchor: top } });
+      }
+      view.focus();
     },
     isReadOnly: () => view.state.readOnly,
     getText: () => view.state.doc.toString(),

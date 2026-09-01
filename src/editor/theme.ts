@@ -29,7 +29,8 @@ function base(p: Palette, dark: boolean): Extension {
   return EditorView.theme(
     {
       "&": { backgroundColor: p.bg, color: p.fg, height: "100%" },
-      ".cm-scroller": { overflow: "auto", justifyContent: "center", fontFamily: FONT, fontSize: "16px", lineHeight: "1.5" },
+      // 行高取 theme.css 的 --rsmd-line-height：渲染块的 .markdown-body 用同一个变量，两者必须同值
+      ".cm-scroller": { overflow: "auto", justifyContent: "center", fontFamily: FONT, fontSize: "16px", lineHeight: "var(--rsmd-line-height)" },
       ".cm-content": { flex: "0 1 860px", minWidth: "0", maxWidth: "860px", boxSizing: "border-box", padding: "32px 24px", caretColor: p.fg },
       "&.cm-focused": { outline: "none" },
       ".cm-line": { padding: "0" },

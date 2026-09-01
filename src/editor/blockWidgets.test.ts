@@ -1,4 +1,4 @@
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Segment } from "./blocks";
@@ -11,6 +11,7 @@ import {
   segmentIndexAt,
   setBlocks,
   toPositions,
+  widgetsVisible,
   type BlockModel,
   type WidgetCache,
 } from "./blockWidgets";
@@ -224,6 +225,37 @@ describe("buildDecorations", () => {
     const s = make(true, 0).update({ changes: { from: 10, to: 11 } }).state;
     // 段 2、段 3 合并到同一行上，只能出装饰一条：CM 不接受重叠的 block 装饰
     expect(decos(s)).toEqual([{ from: 5, to: 13, widget: true }]);
+  });
+});
+
+describe("widgetsVisible (source mode)", () => {
+  it("suppresses every decoration, including the footnotes trailer, when widgets are hidden", () => {
+    const model: BlockModel = { segments: SEGS, footnotesHtml: "<section>fn</section>" };
+    const state = EditorState.create({
+      doc: DOC,
+      extensions: [blockWidgets(new Map()), EditorView.editable.of(true), widgetsVisible.of(false)],
+    }).update({ effects: setBlocks.of(model) }).state;
+    expect(decos(state)).toEqual([]);
+  });
+
+  it("a view reconfigured to hide widgets drops its rendered blocks (and restores them when shown again)", () => {
+    const comp = new Compartment();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: DOC,
+        extensions: [blockWidgets(new Map()), EditorView.editable.of(false), comp.of([])],
+      }),
+      parent,
+    });
+    views.push(view);
+    view.dispatch({ effects: setBlocks.of({ segments: SEGS, footnotesHtml: null }) });
+    expect(view.contentDOM.querySelectorAll(".rsmd-block")).toHaveLength(3);
+    view.dispatch({ effects: comp.reconfigure(widgetsVisible.of(false)) });
+    expect(view.contentDOM.querySelectorAll(".rsmd-block")).toHaveLength(0);
+    view.dispatch({ effects: comp.reconfigure([]) });
+    expect(view.contentDOM.querySelectorAll(".rsmd-block")).toHaveLength(3);
   });
 });
 

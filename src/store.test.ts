@@ -48,7 +48,7 @@ describe("shell store", () => {
       notices: {},
       error: null,
       dirty: {},
-      editing: {},
+      modes: {},
       conflicts: {},
     });
   });
@@ -204,19 +204,34 @@ describe("shell store", () => {
       s().setDirty(1, false);
       expect(s().dirty[1]).toBeUndefined();
       s().setDirty(1, true);
-      s().setEditing(1, true);
+      s().setMode(1, "live");
       s().setConflict(1, true);
       s().removeDoc(1, null);
       expect(s().dirty[1]).toBeUndefined();
-      expect(s().editing[1]).toBeUndefined();
+      expect(s().modes[1]).toBeUndefined();
       expect(s().conflicts[1]).toBeUndefined();
     });
 
-    it("clearing an absent flag is a no-op (no subscriber wake-up)", () => {
+    it("tracks the per-doc mode sparsely: preview is the default and is not stored", () => {
+      s().addDoc(meta(1), true);
+      expect(s().modes[1]).toBeUndefined();
+      s().setMode(1, "live");
+      expect(s().modes[1]).toBe("live");
+      s().setMode(1, "source");
+      expect(s().modes[1]).toBe("source");
+      s().setMode(1, "preview");
+      expect(s().modes[1]).toBeUndefined();
+    });
+
+    it("clearing an absent flag or re-setting the current mode is a no-op (no subscriber wake-up)", () => {
       const before = useShellStore.getState();
-      s().setEditing(1, false);
+      s().setMode(1, "preview");
       s().setConflict(1, false);
       expect(useShellStore.getState()).toBe(before);
+      s().setMode(1, "live");
+      const after = useShellStore.getState();
+      s().setMode(1, "live");
+      expect(useShellStore.getState()).toBe(after);
     });
 
     it("conflict banner outranks the doc notice but not the global error", () => {

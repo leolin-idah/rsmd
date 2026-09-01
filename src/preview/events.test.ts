@@ -30,7 +30,7 @@ const lifecycle = vi.hoisted(() => ({
   openDoc: vi.fn(),
   updateDoc: vi.fn(),
   closeDoc: vi.fn(),
-  toggleEdit: vi.fn(),
+  onModeMenu: vi.fn(),
   saveDoc: vi.fn(async () => {}),
 }));
 vi.mock("./document", () => lifecycle);
@@ -60,14 +60,14 @@ describe("initTauriBridge", () => {
       notices: {},
       error: null,
       dirty: {},
-      editing: {},
+      modes: {},
       conflicts: {},
       settingsOpen: false,
     });
     lifecycle.openDoc.mockClear();
     lifecycle.updateDoc.mockClear();
     lifecycle.closeDoc.mockClear();
-    lifecycle.toggleEdit.mockClear();
+    lifecycle.onModeMenu.mockClear();
     lifecycle.saveDoc.mockClear();
     ipc.openPaths.mockClear();
     ipc.activateRelative.mockClear();
@@ -131,9 +131,9 @@ describe("initTauriBridge", () => {
     expect(lifecycle.updateDoc).toHaveBeenCalledWith(payload);
   });
 
-  it("toggle-edit and save-requested reach the lifecycle with their doc", () => {
-    fire("toggle-edit", { docId: 3 });
-    expect(lifecycle.toggleEdit).toHaveBeenCalledWith(3);
+  it("mode-menu and save-requested reach the lifecycle with their doc", () => {
+    fire("mode-menu", { docId: 3, item: "source" });
+    expect(lifecycle.onModeMenu).toHaveBeenCalledWith(3, "source");
     fire("save-requested", { docId: 3, closeAfter: true });
     expect(lifecycle.saveDoc).toHaveBeenCalledWith(3, true);
   });

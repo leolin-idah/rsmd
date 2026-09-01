@@ -75,7 +75,9 @@ pub fn run() {
                         });
                 }
                 "install-cli" => shell::install_cli(app),
-                "toggle-edit" => session::request_toggle_edit(app),
+                "mode-preview" => session::request_mode(app, ipc::DocMode::Preview),
+                "mode-live" => session::request_mode(app, ipc::DocMode::Live),
+                "mode-source" => session::request_mode(app, ipc::DocMode::Source),
                 "save" => session::request_save(app),
                 // 自定义 Quit：脏文档先问（request_quit 返回 true 表示已弹框）；干净则走 exit → ExitRequested 放行
                 "quit" => {

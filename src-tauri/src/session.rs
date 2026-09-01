@@ -3,8 +3,8 @@
 //! 由 `shell.rs` 为 `AppHandle` 实现；测试用记录调用的 fake 替代。
 
 use crate::ipc::{
-    DocClosedPayload, DocOpenedPayload, DocRefPayload, DocUpdatedPayload, Event, RenderPayload,
-    SaveRequestedPayload,
+    DocClosedPayload, DocMode, DocOpenedPayload, DocRefPayload, DocUpdatedPayload, Event,
+    ModeMenuPayload, RenderPayload, SaveRequestedPayload,
 };
 use crate::render::{self, BlockRange};
 use crate::settings::Settings;
@@ -23,8 +23,8 @@ pub struct OpenDoc {
     pub disk_hash: u64,
     /// 前端编辑器有未保存改动（前端经 set_doc_state 同步）；驱动标题 ●、Save 菜单、关闭/退出守卫
     pub dirty: bool,
-    /// 前端处于编辑态（Edit Document 菜单勾选态）
-    pub editing: bool,
+    /// 前端展示模式（模式菜单的勾选态）
+    pub mode: DocMode,
 }
 
 pub fn content_hash(bytes: &[u8]) -> u64 {
@@ -282,7 +282,7 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
                     watcher, // 竞态失败分支不 push：本次 watcher 随作用域 Drop 停止
                     disk_hash: rendered.hash,
                     dirty: false,
-                    editing: false,
+                    mode: DocMode::Preview,
                 });
                 Ok(id)
             }
@@ -513,14 +513,14 @@ pub fn save_doc<S: Shell>(shell: &S, doc_id: u64, text: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// 前端在 editing / dirty 变化时回写；驱动标题 ●、Edit Document 勾选、Save enable。
-pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, editing: bool, dirty: bool) {
+/// 前端在 mode / dirty 变化时回写；驱动标题 ●、模式菜单勾选、Save enable。
+pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, mode: DocMode, dirty: bool) {
     let state = shell.state();
     let found = {
         let mut docs = state.docs.lock().unwrap();
         match docs.iter_mut().find(|d| d.id == doc_id) {
             Some(d) => {
-                d.editing = editing;
+                d.mode = mode;
                 d.dirty = dirty;
                 true
             }
@@ -534,11 +534,11 @@ pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, editing: bool, dirty: boo
     shell.refresh_menu();
 }
 
-/// 菜单 Edit Document（⌘E）：编辑器归前端，Rust 只转发给 active doc。
-pub fn request_toggle_edit<S: Shell>(shell: &S) {
+/// 模式菜单（Preview / Live ⌘E / Source ⌘/）：模式归前端，Rust 只把被点的项转发给 active doc。
+pub fn request_mode<S: Shell>(shell: &S, item: DocMode) {
     let active = *shell.state().active.lock().unwrap();
     if let Some(doc_id) = active {
-        shell.emit(Event::ToggleEdit(DocRefPayload { doc_id }));
+        shell.emit(Event::ModeMenu(ModeMenuPayload { doc_id, item }));
     }
 }
 
@@ -666,7 +666,7 @@ mod tests {
                 watcher: None,
                 disk_hash,
                 dirty: false,
-                editing: false,
+                mode: DocMode::Preview,
             });
         }
     }
@@ -1084,7 +1084,7 @@ mod tests {
             watcher: None,
             disk_hash: 0,
             dirty: false,
-            editing: false,
+            mode: DocMode::Preview,
         }];
         // 经符号链接打开同一文件：canonicalize 后判重命中
         assert_eq!(find_doc(&docs, &link.canonicalize().unwrap()), Some(1));
@@ -1188,7 +1188,7 @@ mod tests {
         let sh = Fake::default();
         open_document(&sh, a.clone(), true).unwrap();
         let id = sh.ids()[0];
-        set_doc_state(&sh, id, true, true);
+        set_doc_state(&sh, id, DocMode::Live, true);
         assert_eq!(sh.titles().last().unwrap(), "● A");
 
         save_doc(&sh, id, "# A\n\nsaved").unwrap();
@@ -1233,13 +1233,14 @@ mod tests {
         let sh = Fake::default();
         open_document(&sh, a, true).unwrap();
         let id = sh.ids()[0];
+        assert_eq!(sh.state.docs.lock().unwrap()[0].mode, DocMode::Preview); // 新开文档默认 preview
         let before = sh.menu_refreshes.load(Ordering::SeqCst);
 
-        set_doc_state(&sh, id, true, false);
+        set_doc_state(&sh, id, DocMode::Source, false);
 
         assert_eq!(sh.menu_refreshes.load(Ordering::SeqCst), before + 1);
         let docs = sh.state.docs.lock().unwrap();
-        assert!(docs[0].editing);
+        assert_eq!(docs[0].mode, DocMode::Source);
         assert!(!docs[0].dirty);
     }
 
@@ -1249,7 +1250,7 @@ mod tests {
         let p = md(dir, name, "# A");
         open_document(sh, p, true).unwrap();
         let id = *sh.ids().last().unwrap();
-        set_doc_state(sh, id, true, true);
+        set_doc_state(sh, id, DocMode::Live, true);
         id
     }
 
@@ -1339,7 +1340,7 @@ mod tests {
     // ---- 菜单转发（Task 5）----
 
     #[test]
-    fn toggle_edit_and_save_menu_target_the_active_doc() {
+    fn mode_and_save_menus_target_the_active_doc() {
         let dir = tempfile::tempdir().unwrap();
         let a = md(dir.path(), "a.md", "# A");
         let b = md(dir.path(), "b.md", "# B");
@@ -1348,10 +1349,13 @@ mod tests {
         open_document(&sh, b, true).unwrap();
         let id_b = sh.ids()[1];
 
-        request_toggle_edit(&sh);
+        request_mode(&sh, DocMode::Source);
         assert_eq!(
             sh.events().last(),
-            Some(&Event::ToggleEdit(DocRefPayload { doc_id: id_b }))
+            Some(&Event::ModeMenu(ModeMenuPayload {
+                doc_id: id_b,
+                item: DocMode::Source
+            }))
         );
 
         request_save(&sh);
@@ -1365,9 +1369,9 @@ mod tests {
     }
 
     #[test]
-    fn toggle_edit_and_save_without_docs_are_noops() {
+    fn mode_and_save_menus_without_docs_are_noops() {
         let sh = Fake::default();
-        request_toggle_edit(&sh);
+        request_mode(&sh, DocMode::Live);
         request_save(&sh);
         assert!(sh.events().is_empty());
     }

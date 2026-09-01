@@ -8,6 +8,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 export type DocId = number;
 
+/// 文档展示模式：preview 只读全渲染；live 可编辑、光标段露源码；source 纯源码编辑。
+/// 镜像 ipc.rs 的 DocMode（serde lowercase）。
+export type DocMode = "preview" | "live" | "source";
+
 export type Layout = "tabs" | "sideList";
 export type TocSide = "left" | "right";
 
@@ -61,6 +65,12 @@ export interface DocRefPayload {
   docId: DocId;
 }
 
+/// 模式菜单项被点击/快捷键触发：item 是被点的菜单项，切换语义由前端决定
+export interface ModeMenuPayload {
+  docId: DocId;
+  item: DocMode;
+}
+
 export interface DocClosedPayload {
   docId: DocId;
   nextActive: DocId | null;
@@ -81,7 +91,7 @@ export interface Events {
   "watch-unavailable": DocRefPayload;
   "settings-changed": Settings;
   "open-error": string;
-  "toggle-edit": DocRefPayload;
+  "mode-menu": ModeMenuPayload;
   "save-requested": SaveRequestedPayload;
   // 应用菜单 Settings…（⌘,）：无载荷
   "open-settings": null;
@@ -129,8 +139,8 @@ export const renderMarkdown = (docId: DocId, text: string): Promise<RenderPayloa
 export const saveDoc = (docId: DocId, text: string): Promise<void> =>
   invoke("save_doc", { docId, text });
 
-export const setDocState = (docId: DocId, editing: boolean, dirty: boolean): Promise<void> =>
-  invoke("set_doc_state", { docId, editing, dirty });
+export const setDocState = (docId: DocId, mode: DocMode, dirty: boolean): Promise<void> =>
+  invoke("set_doc_state", { docId, mode, dirty });
 
 // ---- 平台 API ----
 

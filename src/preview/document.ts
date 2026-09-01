@@ -1,10 +1,10 @@
 import * as ipc from "../ipc";
-import type { BlockRange, DocId, DocOpenedPayload, DocUpdatedPayload, RenderPayload } from "../ipc";
+import type { BlockRange, DocId, DocMode, DocOpenedPayload, DocUpdatedPayload, RenderPayload } from "../ipc";
 import { createEditor, type EditorHandle } from "../editor/markdownEditor";
 import { installOutlineSpy, refreshOutline, syncOutline } from "../editor/outline";
 import { useShellStore } from "../store";
 
-// 文档生命周期的唯一入口：open / update / close / toggleEdit / save / reload 同时维护 pane、编辑器与 store。
+// 文档生命周期的唯一入口：open / update / close / setDocMode / save / reload 同时维护 pane、编辑器与 store。
 // "哪个文档是 active" 只存在于 store；本模块订阅它并投影到 pane 的显隐上。
 
 interface Pending {
@@ -20,6 +20,7 @@ interface DocEntry {
   title: string;
   scrollTop: number;           // 隐藏前保存，显示时恢复（display:none 会丢滚动位置）
   conflict: DocUpdatedPayload | null; // 编辑中收到的外部改动，等用户 Reload
+  modeBeforeSource: DocMode;   // 进入 source 前的模式；⌘/ 退出 source 时回到这里
 }
 
 let host: HTMLElement | null = null;
@@ -60,10 +61,11 @@ function showActive(active: DocId | null): void {
 
 useShellStore.subscribe((s) => s.active, showActive);
 
+const modeOf = (docId: DocId): DocMode => useShellStore.getState().modes[docId] ?? "preview";
+
 function onDirtyChange(docId: DocId, dirty: boolean): void {
-  const store = useShellStore.getState();
-  store.setDirty(docId, dirty);
-  void ipc.setDocState(docId, store.editing[docId] === true, dirty).catch(() => {});
+  useShellStore.getState().setDirty(docId, dirty);
+  void ipc.setDocState(docId, modeOf(docId), dirty).catch(() => {});
 }
 
 function onRendered(docId: DocId, r: RenderPayload): void {
@@ -108,6 +110,7 @@ export function openDoc(doc: DocOpenedPayload): void {
     title: doc.title,
     scrollTop: 0,
     conflict: null,
+    modeBeforeSource: "preview",
   });
   // 先建 pane 再进 store：activate=true 时 store 的 active 变化会同步触发 showActive → materialize
   useShellStore.getState().addDoc({ docId: doc.docId, path: doc.path, fileName: doc.fileName }, doc.activate);
@@ -148,17 +151,36 @@ export function updateDoc(doc: DocUpdatedPayload): void {
   applyPayload(doc.docId, entry, entry.editor, doc);
 }
 
-export function toggleEdit(docId: DocId): void {
+export function setDocMode(docId: DocId, mode: DocMode): void {
   const entry = registry.get(docId);
   if (!entry) return;
+  const current = modeOf(docId);
+  if (mode === current) return;
   if (entry.pending) materialize(docId, entry); // 只对 active（已物化）触发，防御性处理
   const editor = entry.editor!;
-  const store = useShellStore.getState();
-  const editing = store.editing[docId] !== true;
-  if (editing) editor.beginEditing();
-  else void editor.endEditing();
-  store.setEditing(docId, editing);
-  void ipc.setDocState(docId, editing, editor.isDirty()).catch(() => {});
+  if (mode === "source") entry.modeBeforeSource = current;
+  void editor.setMode(mode); // mode 先行提交（菜单勾选须紧跟按键），编辑器过渡异步完成
+  useShellStore.getState().setMode(docId, mode);
+  void ipc.setDocState(docId, mode, editor.isDirty()).catch(() => {});
+}
+
+/// 菜单/快捷键语义：Live（⌘E）在 live↔preview 间切换；Source（⌘/）进出源码模式，
+/// 退出回到进入前的模式；Preview 直达。
+export function onModeMenu(docId: DocId, item: DocMode): void {
+  const entry = registry.get(docId);
+  if (!entry) return;
+  const current = modeOf(docId);
+  const target =
+    item === "live"
+      ? current === "live"
+        ? "preview"
+        : "live"
+      : item === "source"
+        ? current === "source"
+          ? entry.modeBeforeSource
+          : "source"
+        : "preview";
+  setDocMode(docId, target);
 }
 
 export async function saveDoc(docId: DocId, closeAfter = false): Promise<void> {

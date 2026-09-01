@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorView } from "@codemirror/view";
-import type { BlockRange, DocUpdatedPayload } from "../ipc";
+import type { BlockRange, DocMode, DocUpdatedPayload } from "../ipc";
 import type { EditorHandle, EditorOptions } from "../editor/markdownEditor";
 
 // 假编辑器：记录调用、可模拟用户输入触发 onDirtyChange
@@ -13,16 +13,13 @@ function makeFake(opts: EditorOptions): FakeHandle {
   const scrollDOM = document.createElement("div");
   let text = opts.text;
   let dirty = false;
-  let readOnly = true;
+  let mode: DocMode = "preview";
   const handle: FakeHandle = {
     view: { scrollDOM } as unknown as EditorView,
-    beginEditing: vi.fn(() => {
-      readOnly = false;
+    setMode: vi.fn(async (m: DocMode) => {
+      mode = m;
     }),
-    endEditing: vi.fn(async () => {
-      readOnly = true;
-    }),
-    isReadOnly: () => readOnly,
+    isReadOnly: () => mode === "preview",
     getText: () => text,
     isDirty: () => dirty,
     markSaved: vi.fn(() => {
@@ -71,7 +68,7 @@ vi.mock("../editor/outline", () => outline);
 const ipc = vi.hoisted(() => ({
   renderMarkdown: vi.fn(async () => null),
   saveDoc: vi.fn(async (_id: number, _text: string) => {}),
-  setDocState: vi.fn(async (_id: number, _editing: boolean, _dirty: boolean) => {}),
+  setDocState: vi.fn(async (_id: number, _mode: string, _dirty: boolean) => {}),
   closeDoc: vi.fn(async (_id: number) => {}),
 }));
 vi.mock("../ipc", () => ipc);
@@ -170,26 +167,57 @@ describe("document lifecycle", () => {
     });
   });
 
-  describe("editing", () => {
-    it("toggleEdit flips the editor, the store and tells Rust", () => {
+  describe("modes", () => {
+    it("the live menu item toggles live ↔ preview, updating editor, store and Rust", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
-      expect(editorOf(1).beginEditing).toHaveBeenCalledTimes(1);
-      expect(store.getState().editing[1]).toBe(true);
-      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, true, false);
-      doc.toggleEdit(1);
-      expect(editorOf(1).endEditing).toHaveBeenCalledTimes(1);
-      expect(store.getState().editing[1]).toBeUndefined();
-      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, false, false);
+      doc.onModeMenu(1, "live");
+      expect(editorOf(1).setMode).toHaveBeenLastCalledWith("live");
+      expect(store.getState().modes[1]).toBe("live");
+      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, "live", false);
+      doc.onModeMenu(1, "live");
+      expect(editorOf(1).setMode).toHaveBeenLastCalledWith("preview");
+      expect(store.getState().modes[1]).toBeUndefined();
+      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, "preview", false);
     });
 
-    // I3：菜单勾选须紧跟按键，故 editing=false 在 endEditing() 的渲染 await 之前就提交
-    it("commits editing=false synchronously, without waiting for endEditing to settle", () => {
+    it("the source menu item enters source and returns to the mode it came from", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "source"); // preview → source
+      expect(editorOf(1).setMode).toHaveBeenLastCalledWith("source");
+      expect(store.getState().modes[1]).toBe("source");
+      doc.onModeMenu(1, "source"); // source → 回 preview
+      expect(store.getState().modes[1]).toBeUndefined();
+      doc.onModeMenu(1, "live");
+      doc.onModeMenu(1, "source"); // live → source
+      expect(store.getState().modes[1]).toBe("source");
+      doc.onModeMenu(1, "source"); // source → 回 live
+      expect(store.getState().modes[1]).toBe("live");
+    });
+
+    it("⌘E from source jumps straight to live; the preview item always lands on preview", () => {
+      doc.openDoc(opened(1));
+      doc.onModeMenu(1, "source");
+      doc.onModeMenu(1, "live");
+      expect(store.getState().modes[1]).toBe("live");
+      doc.onModeMenu(1, "preview");
+      expect(store.getState().modes[1]).toBeUndefined();
+      expect(editorOf(1).setMode).toHaveBeenLastCalledWith("preview");
+    });
+
+    it("re-selecting the current mode is a no-op", () => {
+      doc.openDoc(opened(1));
+      doc.onModeMenu(1, "preview"); // 已是 preview
+      expect(editorOf(1).setMode).not.toHaveBeenCalled();
+      expect(ipc.setDocState).not.toHaveBeenCalled();
+    });
+
+    // I3：菜单勾选须紧跟按键，故 mode 在编辑器切换的渲染 await 之前就提交
+    it("commits the mode synchronously, without waiting for the editor transition to settle", () => {
+      doc.openDoc(opened(1));
+      doc.onModeMenu(1, "live");
       let settled = false;
       const handle = editorOf(1);
-      vi.mocked(handle.endEditing).mockImplementationOnce(
+      vi.mocked(handle.setMode).mockImplementationOnce(
         () =>
           new Promise<void>((resolve) => {
             setTimeout(() => {
@@ -198,22 +226,22 @@ describe("document lifecycle", () => {
             }, 0);
           })
       );
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live"); // live → preview
       expect(settled).toBe(false);
-      expect(store.getState().editing[1]).toBeUndefined();
+      expect(store.getState().modes[1]).toBeUndefined();
     });
 
     it("typing marks the doc dirty in the store and in Rust", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       expect(store.getState().dirty[1]).toBe(true);
-      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, true, true);
+      expect(ipc.setDocState).toHaveBeenLastCalledWith(1, "live", true);
     });
 
     it("saveDoc hands the editor text to Rust and clears dirty", async () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       await doc.saveDoc(1);
       expect(ipc.saveDoc).toHaveBeenCalledWith(1, "# Title 1\nx");
@@ -250,7 +278,7 @@ describe("document lifecycle", () => {
 
     it("an own-save echo is applied even while dirty (text is identical, blocks refresh)", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       doc.updateDoc(updated(1, "# Title 1\nx", false));
       expect(editorOf(1).applyExternal).toHaveBeenCalledTimes(1);
@@ -260,7 +288,7 @@ describe("document lifecycle", () => {
     // 回声是异步的：⌘S 之后继续输入，落后的回声若被 diff 应用会抹掉新按键且不进撤销栈
     it("keystrokes after ⌘S survive a stale echo and stay dirty", async () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       await doc.saveDoc(1);
       editorOf(1).type("y");
@@ -273,7 +301,7 @@ describe("document lifecycle", () => {
 
     it("an external change while dirty raises a conflict instead of overwriting", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       doc.updateDoc(updated(1, "theirs", true));
       expect(editorOf(1).applyExternal).not.toHaveBeenCalled();
@@ -283,7 +311,7 @@ describe("document lifecycle", () => {
 
     it("reloadFromDisk applies the conflicting text and clears dirty + conflict", () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       doc.updateDoc(updated(1, "theirs", true, "Theirs"));
       doc.reloadFromDisk(1);
@@ -295,7 +323,7 @@ describe("document lifecycle", () => {
 
     it("saving over a conflict keeps the local text and clears the banner", async () => {
       doc.openDoc(opened(1));
-      doc.toggleEdit(1);
+      doc.onModeMenu(1, "live");
       editorOf(1).type("x");
       doc.updateDoc(updated(1, "theirs", true));
       await doc.saveDoc(1);
@@ -331,10 +359,10 @@ describe("document lifecycle", () => {
       expect(editors.created).toHaveLength(1);
     });
 
-    it("closeDoc / toggleEdit / saveDoc for unknown docs are no-ops", async () => {
+    it("closeDoc / onModeMenu / saveDoc for unknown docs are no-ops", async () => {
       doc.openDoc(opened(1));
       doc.closeDoc(9, null);
-      doc.toggleEdit(9);
+      doc.onModeMenu(9, "live");
       await doc.saveDoc(9);
       expect(active()).toBe(1);
       expect(ipc.saveDoc).not.toHaveBeenCalled();

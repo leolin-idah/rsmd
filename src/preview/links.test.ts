@@ -38,7 +38,7 @@ describe("installLinkHandler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    useShellStore.setState({ error: null, editing: {} });
+    useShellStore.setState({ error: null, modes: {} });
     document.body.innerHTML = "";
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -81,7 +81,7 @@ describe("installLinkHandler", () => {
   });
 
   it("in edit mode a plain click on a link inside a rendered block is left to the editor; ⌘+click follows it", () => {
-    useShellStore.setState({ editing: { 7: true } });
+    useShellStore.setState({ modes: { 7: "live" } });
     const block = document.createElement("div");
     block.className = "rsmd-block";
     pane.appendChild(block);
@@ -97,7 +97,7 @@ describe("installLinkHandler", () => {
   });
 
   it("in edit mode links outside rendered blocks (e.g. the TOC) still work on plain click", () => {
-    useShellStore.setState({ editing: { 7: true } });
+    useShellStore.setState({ modes: { 7: "live" } });
     click(pane, "#intro");
     expect(editor.scrollToLine).toHaveBeenCalledWith(12);
   });

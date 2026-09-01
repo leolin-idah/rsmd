@@ -3,8 +3,19 @@
 
 use crate::render::BlockRange;
 use crate::settings::Settings;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+
+/// 文档展示模式：preview 只读全渲染；live 可编辑、光标段露源码；source 纯源码编辑。
+/// 前端镜像是 lowercase 字符串字面量（src/ipc.ts 的 DocMode）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DocMode {
+    #[default]
+    Preview,
+    Live,
+    Source,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +76,14 @@ pub struct SaveRequestedPayload {
     pub close_after: bool,
 }
 
+/// 模式菜单项被点击/快捷键触发：item 是被点的菜单项，切换语义（toggle / 回到来路）由前端决定。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeMenuPayload {
+    pub doc_id: u64,
+    pub item: DocMode,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     DocumentOpened(DocOpenedPayload),
@@ -75,7 +94,7 @@ pub enum Event {
     WatchUnavailable(DocRefPayload),
     SettingsChanged(Settings),
     OpenError(String),
-    ToggleEdit(DocRefPayload),
+    ModeMenu(ModeMenuPayload),
     SaveRequested(SaveRequestedPayload),
     /// 应用菜单 Settings…（⌘,）：让前端打开设置面板；无载荷
     OpenSettings,
@@ -92,7 +111,7 @@ impl Event {
             Event::WatchUnavailable(_) => "watch-unavailable",
             Event::SettingsChanged(_) => "settings-changed",
             Event::OpenError(_) => "open-error",
-            Event::ToggleEdit(_) => "toggle-edit",
+            Event::ModeMenu(_) => "mode-menu",
             Event::SaveRequested(_) => "save-requested",
             Event::OpenSettings => "open-settings",
         }
@@ -109,7 +128,7 @@ impl Event {
             Event::WatchUnavailable(p) => app.emit(name, p),
             Event::SettingsChanged(p) => app.emit(name, p),
             Event::OpenError(msg) => app.emit(name, msg),
-            Event::ToggleEdit(p) => app.emit(name, p),
+            Event::ModeMenu(p) => app.emit(name, p),
             Event::SaveRequested(p) => app.emit(name, p),
             Event::OpenSettings => app.emit(name, ()),
         }
@@ -124,5 +143,19 @@ mod tests {
     fn open_settings_event_name_matches_frontend_listener() {
         // 前端 src/ipc.ts 的 Events 表用这个字面量注册监听
         assert_eq!(Event::OpenSettings.name(), "open-settings");
+    }
+
+    #[test]
+    fn mode_menu_event_name_and_doc_mode_serde_match_the_frontend() {
+        assert_eq!(
+            Event::ModeMenu(ModeMenuPayload { doc_id: 1, item: DocMode::Source }).name(),
+            "mode-menu"
+        );
+        // 前端 DocMode 是 lowercase 字符串字面量；set_doc_state 的参数走反序列化
+        assert_eq!(serde_json::to_string(&DocMode::Preview).unwrap(), "\"preview\"");
+        assert_eq!(serde_json::to_string(&DocMode::Live).unwrap(), "\"live\"");
+        assert_eq!(serde_json::to_string(&DocMode::Source).unwrap(), "\"source\"");
+        assert_eq!(serde_json::from_str::<DocMode>("\"live\"").unwrap(), DocMode::Live);
+        assert_eq!(DocMode::default(), DocMode::Preview);
     }
 }

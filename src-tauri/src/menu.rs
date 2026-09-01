@@ -1,6 +1,7 @@
 //! 原生菜单的构建：纯"状态 → 菜单树"，不做任何状态变更。
 //! 菜单项 id 的分发在 `lib.rs`（组合根），变更类动作在 `shell.rs` / `session.rs`。
 
+use crate::ipc::DocMode;
 use crate::session::AppState;
 use std::path::PathBuf;
 use tauri::menu::{
@@ -25,14 +26,14 @@ pub fn build_menu(
         })
         .collect();
     let active = *state.active.lock().unwrap();
-    let (active_editing, active_dirty) = state
+    let (active_mode, active_dirty) = state
         .docs
         .lock()
         .unwrap()
         .iter()
         .find(|d| Some(d.id) == active)
-        .map(|d| (d.editing, d.dirty))
-        .unwrap_or((false, false));
+        .map(|d| (d.mode, d.dirty))
+        .unwrap_or((DocMode::Preview, false));
 
     let install_cli = MenuItemBuilder::with_id("install-cli", "Install 'md' Command").build(app)?;
     // 所有显示设置都在面板里（View 菜单已移除）；Settings… 放应用菜单、⌘, 是 macOS 惯例
@@ -54,11 +55,19 @@ pub fn build_menu(
         .build()?;
     // macOS WKWebView 的剪贴板 / 撤销快捷键需要菜单路由，否则编辑器里 ⌘V / ⌘Z 不生效；
     // CodeMirror 通过 beforeinput(historyUndo/Redo) 与 cut/copy/paste DOM 事件接住它们
-    let edit_doc = CheckMenuItemBuilder::with_id("toggle-edit", "Edit Document")
-        .accelerator("CmdOrCtrl+E")
-        .checked(active_editing)
-        .enabled(active.is_some())
-        .build(app)?;
+    // 三种模式做成互斥勾选项（Tauri 无原生 radio）；切换语义在前端，这里只报"哪个被点了"
+    let mode_item = |id: &str, label: &str, accel: Option<&str>, mode: DocMode| {
+        let mut b = CheckMenuItemBuilder::with_id(id, label)
+            .checked(active.is_some() && active_mode == mode)
+            .enabled(active.is_some());
+        if let Some(a) = accel {
+            b = b.accelerator(a);
+        }
+        b.build(app)
+    };
+    let mode_preview = mode_item("mode-preview", "Preview", None, DocMode::Preview)?;
+    let mode_live = mode_item("mode-live", "Live Editing", Some("CmdOrCtrl+E"), DocMode::Live)?;
+    let mode_source = mode_item("mode-source", "Source Mode", Some("CmdOrCtrl+/"), DocMode::Source)?;
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, None)?)
         .item(&PredefinedMenuItem::redo(app, None)?)
@@ -68,7 +77,9 @@ pub fn build_menu(
         .item(&PredefinedMenuItem::paste(app, None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
-        .item(&edit_doc)
+        .item(&mode_preview)
+        .item(&mode_live)
+        .item(&mode_source)
         .build()?;
 
     let open = MenuItemBuilder::with_id("open", "Open…")

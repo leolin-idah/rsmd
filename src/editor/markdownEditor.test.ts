@@ -45,20 +45,50 @@ describe("createEditor", () => {
     h.destroy();
   });
 
-  it("beginEditing makes the view editable; endEditing renders then locks again", async () => {
+  it("setMode('live') makes the view editable; setMode('preview') renders then locks again", async () => {
     const { h, requestRender } = make();
-    h.beginEditing();
+    void h.setMode("live");
     expect(h.isReadOnly()).toBe(false);
     expect(h.view.state.facet(EditorView.editable)).toBe(true);
-    await h.endEditing();
+    await h.setMode("preview");
     expect(h.isReadOnly()).toBe(true);
     expect(requestRender).toHaveBeenCalledTimes(1);
     h.destroy();
   });
 
+  it("setMode('source') shows the whole document as bare editable source, preview restores the widgets", async () => {
+    const { h, parent } = make();
+    expect(parent.querySelectorAll(".rsmd-block").length).toBeGreaterThan(0);
+    await h.setMode("source");
+    expect(h.isReadOnly()).toBe(false);
+    expect(h.view.state.facet(EditorView.editable)).toBe(true);
+    expect(parent.querySelectorAll(".rsmd-block")).toHaveLength(0);
+    await h.setMode("preview");
+    expect(h.isReadOnly()).toBe(true);
+    expect(parent.querySelectorAll(".rsmd-block").length).toBeGreaterThan(0);
+    h.destroy();
+  });
+
+  it("switching live → source keeps the cursor in place; entering from preview parks it at the viewport top", async () => {
+    const { h } = make();
+    void h.setMode("live");
+    expect(h.view.state.selection.main.head).toBe(0); // 视口首行行首
+    h.view.dispatch({ selection: { anchor: 7 } });
+    void h.setMode("source");
+    expect(h.view.state.selection.main.head).toBe(7);
+    h.destroy();
+  });
+
+  it("setMode with the current mode is a no-op", async () => {
+    const { h, requestRender } = make();
+    await h.setMode("preview"); // 已是 preview：不触发渲染
+    expect(requestRender).not.toHaveBeenCalled();
+    h.destroy();
+  });
+
   it("reports dirty on the first change, clean when the text returns to the saved baseline or after markSaved", () => {
     const { h, onDirtyChange } = make();
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ changes: { from: 0, insert: "x" } });
     expect(h.isDirty()).toBe(true);
     expect(onDirtyChange).toHaveBeenLastCalledWith(true);
@@ -77,7 +107,7 @@ describe("createEditor", () => {
 
   it("applyExternal patches minimally, maps the cursor, resets the baseline and skips history", () => {
     const { h, onDirtyChange } = make();
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ selection: { anchor: 7 } }); // "pa|ra"
     h.applyExternal(TEXT2, HTML2, BLOCKS);
     expect(h.getText()).toBe(TEXT2);
@@ -92,7 +122,7 @@ describe("createEditor", () => {
 
   it("applyExternal clears a pending dirty state and rebaselines onto the external text", () => {
     const { h, onDirtyChange } = make();
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ changes: { from: 0, insert: "x" } });
     expect(h.isDirty()).toBe(true);
     h.applyExternal(TEXT2, HTML2, BLOCKS);
@@ -110,7 +140,7 @@ describe("createEditor", () => {
     vi.useFakeTimers();
     const { h, requestRender, onRendered } = make();
     requestRender.mockResolvedValueOnce(RENDER2);
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ changes: { from: 3, insert: "itle" } });
     await vi.advanceTimersByTimeAsync(500);
     expect(requestRender).toHaveBeenCalledWith(TEXT2);
@@ -129,7 +159,7 @@ describe("createEditor", () => {
           resolve = r;
         })
     );
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ changes: { from: 3, insert: "itle" } });
     await vi.advanceTimersByTimeAsync(500);
     h.view.dispatch({ changes: { from: 0, insert: "!" } }); // 回包前又改了
@@ -144,7 +174,7 @@ describe("createEditor", () => {
   it("re-renders immediately when the cursor leaves a segment that has unrendered edits", async () => {
     vi.useFakeTimers();
     const { h, requestRender } = make();
-    h.beginEditing();
+    void h.setMode("live");
     h.view.dispatch({ changes: { from: 3, insert: "!" } }); // 在段 1 内编辑
     await vi.advanceTimersByTimeAsync(100); // 尚未到 idle
     expect(requestRender).not.toHaveBeenCalled();
@@ -154,7 +184,7 @@ describe("createEditor", () => {
     h.destroy();
   });
 
-  it("stays editable when beginEditing intervenes while endEditing awaits its render", async () => {
+  it("stays editable when setMode('live') intervenes while a switch to preview awaits its render", async () => {
     const { h, requestRender } = make();
     let resolve!: (p: RenderPayload | null) => void;
     requestRender.mockImplementationOnce(
@@ -163,9 +193,9 @@ describe("createEditor", () => {
           resolve = r;
         })
     );
-    h.beginEditing();
-    const leaving = h.endEditing();
-    h.beginEditing(); // 回包前用户又按了 ⌘E
+    void h.setMode("live");
+    const leaving = h.setMode("preview");
+    void h.setMode("live"); // 回包前用户又按了 ⌘E
     resolve(null);
     await leaving;
     expect(h.isReadOnly()).toBe(false);
@@ -176,8 +206,8 @@ describe("createEditor", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { h, requestRender } = make();
     requestRender.mockRejectedValueOnce(new Error("ipc down"));
-    h.beginEditing();
-    await h.endEditing(); // 拒绝当作"无结果"，不能让 endEditing 卡在可编辑态
+    void h.setMode("live");
+    await h.setMode("preview"); // 拒绝当作"无结果"，不能让切回 preview 卡在可编辑态
     expect(h.isReadOnly()).toBe(true);
     warn.mockRestore();
     h.destroy();
@@ -186,7 +216,7 @@ describe("createEditor", () => {
   it("does not schedule a render for an external sync", async () => {
     vi.useFakeTimers();
     const { h, requestRender } = make();
-    h.beginEditing();
+    void h.setMode("live");
     h.applyExternal(TEXT2, HTML2, BLOCKS); // blocks 随文本一起到达，无需回问 Rust
     await vi.advanceTimersByTimeAsync(500);
     expect(requestRender).not.toHaveBeenCalled();

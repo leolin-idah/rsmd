@@ -1,6 +1,7 @@
 import {
   EditorSelection,
   EditorState,
+  Facet,
   Prec,
   StateEffect,
   StateField,
@@ -33,6 +34,11 @@ export interface BlockState {
 }
 
 export const setBlocks = StateEffect.define<BlockModel>();
+
+/// 渲染块 widget 的总开关：source 模式提供 false，整篇露源码。默认（无提供者）为 true。
+export const widgetsVisible = Facet.define<boolean, boolean>({
+  combine: (values) => values.every((v) => v),
+});
 
 export function toPositions(model: BlockModel, doc: Text): PosSegment[] {
   const out: PosSegment[] = [];
@@ -137,6 +143,7 @@ class BlockWidget extends WidgetType {
 }
 
 export function buildDecorations(state: EditorState, cache: WidgetCache): DecorationSet {
+  if (!state.facet(widgetsVisible)) return Decoration.none;
   const { segments, footnotesHtml } = state.field(blocksField);
   const editable = state.facet(EditorView.editable);
   const show = revealed(segments, state.selection, editable);
@@ -231,7 +238,7 @@ export function blockWidgets(cache: WidgetCache): Extension {
   return [
     blocksField,
     // block 装饰只能由 facet/StateField 提供（不能来自 ViewPlugin）
-    EditorView.decorations.compute([blocksField, "selection", EditorView.editable], (state) =>
+    EditorView.decorations.compute([blocksField, "selection", EditorView.editable, widgetsVisible], (state) =>
       buildDecorations(state, cache)
     ),
     revealOnClick,

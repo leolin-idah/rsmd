@@ -1,7 +1,7 @@
 //! 前端 → Rust 的 `#[tauri::command]` 薄壳：只做参数适配，逻辑全在 `session`。
 //! 签名与 `src/ipc.ts` 一一对应。
 
-use crate::ipc::RenderPayload;
+use crate::ipc::{DocMode, RenderPayload};
 use crate::session::{self, AppState};
 use crate::shell;
 use crate::settings::Settings;
@@ -60,8 +60,8 @@ pub fn save_doc(app: AppHandle, doc_id: u64, text: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn set_doc_state(app: AppHandle, doc_id: u64, editing: bool, dirty: bool) -> Result<(), String> {
-    session::set_doc_state(&app, doc_id, editing, dirty);
+pub fn set_doc_state(app: AppHandle, doc_id: u64, mode: DocMode, dirty: bool) -> Result<(), String> {
+    session::set_doc_state(&app, doc_id, mode, dirty);
     Ok(())
 }
 

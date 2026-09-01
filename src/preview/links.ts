@@ -18,9 +18,9 @@ export function installLinkHandler(host: HTMLElement): void {
     if (!pane) return;
     const docId = Number(pane.dataset.docId);
     if (!Number.isFinite(docId)) return;
-    // 编辑态下渲染块内的点击用于把光标移进该块（blockWidgets 的 mousedown），跟随链接须 ⌘+点击；
-    // 块外的链接（TOC）不受影响
-    if (a.closest(".rsmd-block") && useShellStore.getState().editing[docId] === true && !e.metaKey) return;
+    // live 模式下渲染块内的点击用于把光标移进该块（blockWidgets 的 mousedown），跟随链接须 ⌘+点击；
+    // 块外的链接（TOC）不受影响。preview 直接点击；source 没有渲染链接，不涉及
+    if (a.closest(".rsmd-block") && useShellStore.getState().modes[docId] === "live" && !e.metaKey) return;
     const href = a.getAttribute("href") ?? "";
 
     if (/^https?:/i.test(href)) {

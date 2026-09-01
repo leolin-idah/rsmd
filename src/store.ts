@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { DocId, Settings } from "./ipc";
+import type { DocId, DocMode, Settings } from "./ipc";
 
 export interface TabInfo {
   docId: DocId;
@@ -25,9 +25,10 @@ export interface ShellState {
   notices: Readonly<Record<DocId, string>>;
   // 全局横幅：open-error 等尚无 doc 可归属的错误
   error: string | null;
-  // 以下三组都是稀疏表：只存 true，置 false 即删键
+  // 以下三组都是稀疏表：dirty/conflicts 只存 true，置 false 即删键；
+  // modes 只存非默认模式，preview 即删键
   dirty: Readonly<Record<DocId, boolean>>; // 编辑器有未保存改动 → tab ●
-  editing: Readonly<Record<DocId, boolean>>; // 处于编辑态（链接需 ⌘+点击）
+  modes: Readonly<Record<DocId, DocMode>>; // 文档展示模式（live 下链接需 ⌘+点击）
   conflicts: Readonly<Record<DocId, boolean>>; // 编辑中收到外部改动，等 Reload
   // Rust Settings 的投影：null = 握手前尚未收到。面板改值本地先行写这里，
   // body.dataset 的 DOM 投影订阅本字段（settings/projection.ts），Rust 回声幂等
@@ -41,14 +42,14 @@ export interface ShellState {
   clearNotice(docId: DocId): void;
   setError(message: string): void;
   setDirty(docId: DocId, dirty: boolean): void;
-  setEditing(docId: DocId, editing: boolean): void;
+  setMode(docId: DocId, mode: DocMode): void;
   setConflict(docId: DocId, conflict: boolean): void;
   setSettings(settings: Settings): void;
   openSettings(): void;
   closeSettings(): void;
 }
 
-type FlagKey = "dirty" | "editing" | "conflicts";
+type FlagKey = "dirty" | "conflicts";
 
 /// 稀疏布尔表的统一写法：不变则返回原对象（订阅者不被唤醒）
 function setFlag(
@@ -117,7 +118,7 @@ export const useShellStore = create<ShellState>()(
     notices: {},
     error: null,
     dirty: {},
-    editing: {},
+    modes: {},
     conflicts: {},
     settings: null,
     settingsOpen: false,
@@ -148,7 +149,7 @@ export const useShellStore = create<ShellState>()(
           notices,
           active,
           dirty: without(s.dirty, docId),
-          editing: without(s.editing, docId),
+          modes: without(s.modes, docId),
           conflicts: without(s.conflicts, docId),
         };
       });
@@ -181,8 +182,14 @@ export const useShellStore = create<ShellState>()(
     setDirty(docId, dirty) {
       set((s) => setFlag(s, "dirty", docId, dirty));
     },
-    setEditing(docId, editing) {
-      set((s) => setFlag(s, "editing", docId, editing));
+    setMode(docId, mode) {
+      set((s) => {
+        if ((s.modes[docId] ?? "preview") === mode) return s; // 不变则原对象，订阅者不被唤醒
+        const modes = { ...s.modes };
+        if (mode === "preview") delete modes[docId];
+        else modes[docId] = mode;
+        return { modes };
+      });
     },
     setConflict(docId, conflict) {
       set((s) => setFlag(s, "conflicts", docId, conflict));

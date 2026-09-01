@@ -43,7 +43,7 @@ describe("App shell", () => {
       notices: {},
       error: null,
       dirty: {},
-      editing: {},
+      modes: {},
       conflicts: {},
       settings: null,
       settingsOpen: false,

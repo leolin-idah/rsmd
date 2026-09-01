@@ -1,5 +1,15 @@
 @import "github-markdown-css/github-markdown.css";
 
+/* 排版节奏的单一来源。github-markdown-css 照搬 GitHub 网页的紧凑值（正文 1.5、块间 16px），
+   放在窄栏的桌面编辑器里偏挤，这里整体放宽一档：
+   --rsmd-line-height 同时喂给 .cm-scroller（源码行）与 .markdown-body（渲染块），
+   两者必须同值，否则读写切换时同一段落高度变化、版面跳动（见 editor/theme.ts）。
+   --rsmd-block-gap 是块之间的基准间距，标题上方与分隔线上下按它派生。 */
+:root {
+  --rsmd-line-height: 1.7;
+  --rsmd-block-gap: 20px;
+}
+
 html,
 body,
 #root {
@@ -66,23 +76,44 @@ body[data-layout="sideList"] #shell {
    position: relative 让每个块成为自己的 selection root，跨块选区高亮不会铺满窗口。
    块间距必须是 widget 盒内的 padding：每个 widget 只装一个顶层元素，github-markdown-css 的
    >*:first-child / >*:last-child 会把它的外边距清零；而 CM 的高度图按 widget 盒测量，
-   外边距若穿透盒子会让 lineBlockAt().top 与滚动估算漂移。数值复刻 github 的折叠后间距：
-   普通块下方 16px；标题上方多 8px（16 + 8 = 24）；分隔线上下 24px。
+   外边距若穿透盒子会让 lineBlockAt().top 与滚动估算漂移。间距沿用 github 的折叠后节奏，
+   只是基准换成 --rsmd-block-gap：普通块下方一档；标题上方多半档；分隔线上下各一档半。
    white-space 必须重置：.cm-content 是 white-space: pre，comrak 输出里 <tr>/<li> 之间的换行
    若被继承会渲染成空行，表格行与列表项之间出现大片空隙 */
 .cm-content .markdown-body.rsmd-block {
-  padding: 0 0 16px;
+  padding: 0 0 var(--rsmd-block-gap);
   background: transparent;
   position: relative;
   white-space: normal;
 }
 
+/* 标题上方额外留半档：与 github「标题 margin-top 比正文间距多半档」的节奏一致 */
 .cm-content .markdown-body.rsmd-block:has(> h1, > h2, > h3, > h4, > h5, > h6) {
-  padding-top: 8px;
+  padding-top: calc(var(--rsmd-block-gap) / 2);
 }
 
 .cm-content .markdown-body.rsmd-block:has(> hr) {
-  padding: 8px 0 24px;
+  padding: calc(var(--rsmd-block-gap) / 2) 0 calc(var(--rsmd-block-gap) * 1.5);
+}
+
+/* 块「内部」的行距与段距同样放宽：一个 widget 里可能装着多段（引用块）、多项（列表）、多行单元格（表格）。
+   :not(:last-child) 不能省——github-markdown-css 靠 >*:last-child 把顶层元素的下外边距清零，
+   而这里的选择器多一个元素名，特异性反而更高；若把最后一个元素也算进来，外边距会穿透 widget 盒，
+   CM 的高度图按盒测量，lineBlockAt().top 与滚动估算就会漂移（同上方 rsmd-block 的说明）。 */
+.cm-content .markdown-body {
+  line-height: var(--rsmd-line-height);
+}
+
+.cm-content .markdown-body :is(p, blockquote, ul, ol, dl, table, pre, details):not(:last-child) {
+  margin-bottom: var(--rsmd-block-gap);
+}
+
+.cm-content .markdown-body li > p {
+  margin-top: var(--rsmd-block-gap);
+}
+
+.cm-content .markdown-body li + li {
+  margin-top: 0.4em;
 }
 
 /* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
