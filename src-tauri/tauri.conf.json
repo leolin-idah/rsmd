@@ -11,7 +11,17 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "rsmd", "width": 960, "height": 720 }
+      {
+        "label": "main",
+        "title": "rsmd",
+        "width": 960,
+        "height": 720,
+        "minWidth": 560,
+        "minHeight": 360,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 14 }
+      }
     ],
     "security": {
       "csp": null,

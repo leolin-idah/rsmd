@@ -17,10 +17,18 @@ export default function App() {
 
   return (
     <div id="shell">
-      {hasDoc && <TabBar />}
+      {/* TabBar 常驻：隐藏式标题栏下没有文档时它就是一条空标题栏——
+          红绿灯的落点与整窗唯一的拖拽区，条件渲染会让欢迎页无处拖窗 */}
+      <TabBar />
       <div id="main">
         {banner && (
           <div className="banner">
+            <svg className="banner-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M8 1.3 15.4 14H.6L8 1.3Zm0 3.9c-.4 0-.7.3-.7.8l.2 3.5h1l.2-3.5c0-.5-.3-.8-.7-.8Zm0 7.3a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"
+              />
+            </svg>
             <span>{banner.text}</span>
             {banner.action === "reload" && active !== null && (
               <button className="banner-action" onClick={() => reloadFromDisk(active)}>
@@ -30,7 +38,32 @@ export default function App() {
           </div>
         )}
         {!hasDoc && (
-          <p className="welcome">Open a Markdown file (⌘O) or drop it here.</p>
+          <div className="welcome">
+            {/* Markdown 官方标志形状的空态图标，纯装饰 */}
+            <svg className="welcome-mark" viewBox="0 0 208 128" aria-hidden="true">
+              <rect x="5" y="5" width="198" height="118" rx="12" fill="none" stroke="currentColor" strokeWidth="10" />
+              <path
+                fill="currentColor"
+                d="M30 98V30h20l20 25 20-25h20v68H90V59L70 84 50 59v39Zm125 0-30-33h20V30h20v35h20Z"
+              />
+            </svg>
+            <p className="welcome-title">No document open</p>
+            <div className="welcome-hints">
+              <div className="welcome-hint">
+                <span>Open a Markdown file</span>
+                <kbd>⌘O</kbd>
+              </div>
+              <div className="welcome-hint">
+                <span>Toggle edit mode</span>
+                <kbd>⌘E</kbd>
+              </div>
+              <div className="welcome-hint">
+                <span>Settings</span>
+                <kbd>⌘,</kbd>
+              </div>
+            </div>
+            <p className="welcome-drop">…or drop a file here</p>
+          </div>
         )}
         <PreviewPane />
       </div>

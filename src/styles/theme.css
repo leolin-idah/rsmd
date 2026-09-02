@@ -4,10 +4,56 @@
    放在窄栏的桌面编辑器里偏挤，这里整体放宽一档：
    --rsmd-line-height 同时喂给 .cm-scroller（源码行）与 .markdown-body（渲染块），
    两者必须同值，否则读写切换时同一段落高度变化、版面跳动（见 editor/theme.ts）。
-   --rsmd-block-gap 是块之间的基准间距，标题上方与分隔线上下按它派生。 */
+   --rsmd-block-gap 是块之间的基准间距，标题上方与分隔线上下按它派生。
+
+   其余是 chrome（tab 条 / 侧栏 / TOC / 面板）的设计令牌：macOS 控件语汇——
+   系统蓝 accent、13px 控件字号、实色仿 material 底、120ms hover 过渡。
+   正文配色仍归 github-markdown-css 管，令牌只服务 chrome。 */
 :root {
+  color-scheme: light dark;
+
   --rsmd-line-height: 1.7;
   --rsmd-block-gap: 20px;
+
+  --accent: #007aff;
+  --chrome-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --chrome-bg: #f0efee;
+  --chrome-fg: #1d1d1f;
+  --chrome-fg-muted: rgba(60, 60, 67, 0.6);
+  --chrome-hairline: rgba(0, 0, 0, 0.09);
+  --chrome-hover: rgba(0, 0, 0, 0.05);
+  --chrome-press: rgba(0, 0, 0, 0.09);
+  --card-bg: #ffffff;
+  --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
+  --seg-checked-bg: #ffffff;
+  --control-bg: rgba(120, 120, 128, 0.14);
+  --switch-off-bg: rgba(120, 120, 128, 0.32);
+  --panel-bg: #f5f5f5;
+  --warn-dot: #bf8700;
+  --dur: 120ms;
+  --rsmd-header-h: 40px;
+  /* 悬浮顶栏的玻璃底：backdrop-filter 之上要留足不透明度，否则正文滚过时文字透出来发花 */
+  --chrome-glass: rgba(240, 239, 238, 0.75);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #0a84ff;
+    --chrome-bg: #161b22;
+    --chrome-fg: #e6edf3;
+    --chrome-fg-muted: rgba(235, 235, 245, 0.55);
+    --chrome-hairline: rgba(255, 255, 255, 0.09);
+    --chrome-hover: rgba(255, 255, 255, 0.06);
+    --chrome-press: rgba(255, 255, 255, 0.11);
+    --card-bg: #262c36;
+    --card-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.4);
+    --seg-checked-bg: #4b525d;
+    --control-bg: rgba(255, 255, 255, 0.09);
+    --switch-off-bg: rgba(120, 120, 128, 0.4);
+    --panel-bg: #20252d;
+    --warn-dot: #d29922;
+    --chrome-glass: rgba(22, 27, 34, 0.72);
+  }
 }
 
 html,
@@ -34,6 +80,7 @@ body {
 #shell {
   display: flex;
   height: 100%;
+  position: relative; /* tabs 布局下 #tablist 绝对定位悬浮于此 */
 }
 
 body[data-layout="tabs"] #shell {
@@ -50,6 +97,7 @@ body[data-layout="sideList"] #shell {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  position: relative; /* .welcome 绝对定位覆盖层的锚点 */
 }
 
 #panes {
@@ -116,21 +164,41 @@ body[data-layout="sideList"] #shell {
   margin-top: 0.4em;
 }
 
-/* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ---- */
+/* ---- 正文轻度打磨：字距 / hairline / 圆角，不碰行高与块间距机制 ---- */
 
-/* 胶囊式选中态：active 项是带圆角描边的浮起块，不再通顶/通栏。
-   这样 active 的白底不会与标题栏连成一片，也就不需要在 #shell 顶部再画分隔线；
-   tab 条与内容区之间的分界由淡阴影代替 1px 实线 */
+.cm-content .markdown-body :is(h1, h2, h3) {
+  letter-spacing: -0.015em;
+}
+
+/* github 的 h1/h2 下划线偏重，柔化成 hairline */
+.cm-content .markdown-body :is(h1, h2) {
+  border-bottom-color: rgba(31, 35, 40, 0.09);
+}
+
+.cm-content .markdown-body pre {
+  border-radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cm-content .markdown-body :is(h1, h2) {
+    border-bottom-color: rgba(230, 237, 243, 0.1);
+  }
+}
+
+/* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ----
+   隐藏式标题栏（titleBarStyle: Overlay）后这条兼任标题栏：
+   tabs 布局固定 40px 高、左侧让出红绿灯（trafficLightPosition x16/y14，按钮带 ≈68px）；
+   sideList 布局改为顶部让位。data-tauri-drag-region 在 TabBar.tsx 上，空白处拖窗。 */
+
 #tablist {
   display: flex;
   flex: none;
   gap: 4px;
-  padding: 3px 6px;
-  /* side-list 的 width: 220px 要含 padding，否则加内边距后侧栏被撑宽 */
+  /* 固定高/宽要含 padding，否则内边距会把条撑大 */
   box-sizing: border-box;
-  background: #f6f8fa;
-  font-family: -apple-system, sans-serif;
-  font-size: 12px;
+  background: var(--chrome-bg);
+  font-family: var(--chrome-font);
+  font-size: 13px;
   user-select: none;
   -webkit-user-select: none;
   /* 阴影要压在相邻 pane 之上：.markdown-body 有自己的白底且 position: relative，
@@ -138,7 +206,7 @@ body[data-layout="sideList"] #shell {
   position: relative;
   z-index: 1;
   /* tab 条/侧栏是 chrome 而非内容区：系统「显示滚动条」设为始终时，横向那条会吃掉
-     31px tab 条近一半高度，纵向那条会压缩侧栏文件名。隐藏的只是滚动条本身，
+     tab 条近一半高度，纵向那条会压缩侧栏文件名。隐藏的只是滚动条本身，
      触控板/滚轮滚动与 scrollIntoView 都照常工作 */
   scrollbar-width: none;
 }
@@ -148,53 +216,99 @@ body[data-layout="sideList"] #shell {
 }
 
 body[data-layout="tabs"] #tablist {
+  /* 悬浮于内容之上：正文从底下穿过，玻璃效果才有东西可模糊。
+     让位关系：--rsmd-content-pad-top 抬高 .cm-content 顶边距（editor/theme.ts），
+     nav.toc / .banner 各自加同量偏移，editor 的 scrollMargins 让出同高（markdownEditor.ts） */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   flex-direction: row;
+  align-items: center;
+  /* 40px = 红绿灯(12px 按钮 + y14 边距)垂直居中的标题栏高度；空 tab 条也保持此高 */
+  height: var(--rsmd-header-h);
+  padding: 6px 8px 6px 78px;
   overflow-x: auto;
   /* 两层：先一条不模糊的 1px hairline 把边界压实，再叠柔和阴影；都画在盒外，不占条高 */
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 0 var(--chrome-hairline), 0 1px 3px rgba(0, 0, 0, 0.07);
+}
+
+/* 玻璃只在支持 backdrop-filter 时启用，否则保持 #tablist 的实色底 */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  body[data-layout="tabs"] #tablist {
+    background: var(--chrome-glass);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6);
+    backdrop-filter: blur(18px) saturate(1.6);
+  }
+}
+
+/* 顶栏悬浮后由内容侧让位：正文顶边距 = 顶栏 + 原 32px 节奏 */
+body[data-layout="tabs"] #main {
+  --rsmd-content-pad-top: calc(var(--rsmd-header-h) + 32px);
+}
+
+body[data-layout="tabs"] .banner {
+  margin-top: var(--rsmd-header-h);
 }
 
 body[data-layout="sideList"] #tablist {
   flex-direction: column;
-  width: 220px;
-  padding: 6px;
+  width: 230px;
+  /* 顶部 48px 让出红绿灯；这片空白同属拖拽区 */
+  padding: 48px 8px 8px;
   overflow-y: auto;
-  box-shadow: 1px 0 0 rgba(0, 0, 0, 0.08), 1px 0 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 1px 0 0 var(--chrome-hairline), 1px 0 3px rgba(0, 0, 0, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  body[data-layout="tabs"] #tablist {
+    /* 暗色下黑阴影落在 #0d1117 上几乎看不见，全靠 hairline 压边 */
+    box-shadow: 0 1px 0 var(--chrome-hairline), 0 1px 3px rgba(0, 0, 0, 0.5);
+  }
+
+  body[data-layout="sideList"] #tablist {
+    box-shadow: 1px 0 0 var(--chrome-hairline), 1px 0 3px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 上下 3(条) + 1(边) + 4(项) 两侧合计 16px + 行高 ≈ 原先 31px 的条高不变 */
-  padding: 4px 9px;
-  /* 透明描边占位，选中时只改颜色，宽高不抖 1px */
-  border: 1px solid transparent;
+  padding: 5px 6px 5px 10px;
+  line-height: 16px;
   border-radius: 6px;
-  color: #57606a;
+  color: var(--chrome-fg-muted);
   cursor: default;
   white-space: nowrap;
+  transition: background-color var(--dur) ease, color var(--dur) ease;
 }
 
 body[data-layout="tabs"] .tab {
   flex: 1 1 0;
   /* 收缩下限：一次开很多文件时 tab 停在 120px 而非被均分到不可读，
      溢出的部分交给 #tablist 的 overflow-x 横向滚动。
-     border-box 让 120/200 就是实际可见宽度，不再被 padding/描边撑开 */
+     border-box 让 120/200 就是实际可见宽度 */
   box-sizing: border-box;
   min-width: 120px;
   max-width: 200px;
 }
 
-/* 去掉 tab 之间的竖线后，靠 hover 淡底提示可点；选中项已有白底描边，不再叠加 */
 .tab:not(.active):hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--chrome-hover);
 }
 
+/* 选中态：浮起的小卡片（描边并进 box-shadow，不占布局、无 1px 抖动） */
 .tab.active {
-  background: var(--bgColor-default, #fff);
-  border-color: #d0d7de;
-  color: #1f2328;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+  color: var(--chrome-fg);
+}
+
+/* 侧栏里浮卡显得突兀，选中行用 macOS 边栏式的灰底胶囊 */
+body[data-layout="sideList"] .tab.active {
+  background: var(--chrome-press);
+  box-shadow: none;
 }
 
 .tab-label {
@@ -204,87 +318,72 @@ body[data-layout="tabs"] .tab {
   text-overflow: ellipsis;
 }
 
+/* 文件不可用的警示点（左侧）；与右侧尾槽的脏点颜色区分开 */
 .tab-dot {
   flex: none;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #bf8700;
+  background: var(--warn-dot);
 }
 
-.tab-dirty {
+/* 尾槽：脏点与关闭按钮叠放在同一 18px 位（TabBar.tsx 注释），hover 时圆点让位给 × */
+.tab-trailing {
   flex: none;
-  font-size: 9px;
-  line-height: 1;
-  color: #bf8700;
+  position: relative;
+  width: 18px;
+  height: 18px;
 }
 
 .tab-close {
-  flex: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
-  padding: 0 2px;
+  padding: 0;
   background: transparent;
   color: inherit;
-  font-size: 13px;
-  line-height: 1;
-  border-radius: 4px;
-  visibility: hidden;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity var(--dur) ease, background-color var(--dur) ease;
 }
 
 .tab:hover .tab-close,
 .tab.active .tab-close {
-  visibility: visible;
+  opacity: 1;
+}
+
+/* 脏文档未悬停时不显 ×，让圆点可见 */
+.tab:has(.tab-dirty):not(:hover) .tab-close {
+  opacity: 0;
 }
 
 .tab-close:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--chrome-press);
 }
 
-@media (prefers-color-scheme: dark) {
-  #tablist {
-    background: #161b22;
-  }
+.tab-dirty {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chrome-fg-muted);
+  pointer-events: none;
+  transition: opacity var(--dur) ease;
+}
 
-  body[data-layout="tabs"] #tablist {
-    /* 暗色下黑阴影落在 #0d1117 上几乎看不见，hairline 改用浅色 */
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.5);
-  }
-
-  body[data-layout="sideList"] #tablist {
-    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.08), 1px 0 3px rgba(0, 0, 0, 0.5);
-  }
-
-  .tab {
-    color: #8b949e;
-  }
-
-  .tab:not(.active):hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .tab.active {
-    background: var(--bgColor-default, #0d1117);
-    border-color: #30363d;
-    color: #e6edf3;
-  }
-
-  .tab-dot {
-    background: #d29922;
-  }
-
-  .tab-dirty {
-    color: #d29922;
-  }
-
-  .tab-close:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
+.tab:hover .tab-dirty {
+  opacity: 0;
 }
 
 /* ---- TOC：pane 内侧边列，滚动跟随高亮 ---- */
 
 /* pane 是容器查询的容器：宽度不足 720px（TOC 220 + 正文至少 500）时自动隐藏 TOC。
-   以 pane 而非视口为准——side-list 布局下左侧 220px 列表已被扣除，判断才准确。
+   以 pane 而非视口为准——side-list 布局下左侧列表已被扣除，判断才准确。
    inline-size 包含只影响 pane 自身的内联尺寸计算，它的宽度本来就由 #panes/#main 的 flex 决定 */
 .pane {
   container-type: inline-size;
@@ -303,8 +402,15 @@ nav.toc {
   height: 100%;
   overflow-y: auto;
   padding: 32px 12px 32px 0;
-  font-family: -apple-system, sans-serif;
+  font-family: var(--chrome-font);
   font-size: 12px;
+  line-height: 1.5;
+  /* 长目录的滚动条是视觉噪音：同 #tablist，只隐藏滚动条本身，滚动照常 */
+  scrollbar-width: none;
+}
+
+nav.toc::-webkit-scrollbar {
+  display: none;
 }
 
 body[data-toc="off"] nav.toc {
@@ -318,6 +424,11 @@ body[data-toc-side="left"] nav.toc {
   padding: 32px 0 32px 12px;
 }
 
+/* 悬浮顶栏下 TOC 顶部同步让位（在 toc-side 的 padding 简写之后声明才生效） */
+body[data-layout="tabs"] nav.toc {
+  padding-top: calc(var(--rsmd-header-h) + 32px);
+}
+
 .toc ul {
   list-style: none;
   margin: 0;
@@ -328,66 +439,118 @@ body[data-toc-side="left"] nav.toc {
   display: block;
   padding: 4px 8px;
   border-radius: 6px;
-  color: #57606a;
+  color: var(--chrome-fg-muted);
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background-color var(--dur) ease, color var(--dur) ease;
 }
 
 .toc a:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--chrome-hover);
+  color: var(--chrome-fg);
 }
 
 .toc a.active {
-  color: #1f2328;
+  color: var(--accent);
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.05);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-@media (prefers-color-scheme: dark) {
-  .toc a {
-    color: #8b949e;
-  }
-
-  .toc a:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .toc a.active {
-    color: #e6edf3;
-    background: rgba(255, 255, 255, 0.08);
-  }
-}
+/* ---- 欢迎空态：绝对覆盖 #main（不与 #panes 分抢 flex 高度），纯展示、不截获指针 ---- */
 
 .welcome {
-  color: #888;
-  text-align: center;
-  margin-top: 40vh;
-  font-family: -apple-system, sans-serif;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--chrome-font);
+  color: var(--chrome-fg-muted);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none; /* 盖在 banner 之上，别挡 Reload 按钮 */
 }
+
+.welcome-mark {
+  width: 76px;
+  opacity: 0.3;
+}
+
+.welcome-title {
+  margin: 16px 0 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--chrome-fg);
+}
+
+.welcome-hints {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 10px 12px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.welcome-hint {
+  display: contents;
+}
+
+.welcome-hint span {
+  justify-self: end;
+}
+
+.welcome-hint kbd {
+  justify-self: start;
+  font-family: var(--chrome-font);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--control-bg);
+  box-shadow: inset 0 0 0 1px var(--chrome-hairline);
+  color: var(--chrome-fg);
+}
+
+.welcome-drop {
+  margin: 24px 0 0;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* ---- 顶部通知条 ---- */
 
 .banner {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 8px 16px;
-  background: #fff3cd;
-  color: #664d03;
-  font-family: -apple-system, sans-serif;
+  background: #fcf2d5;
+  color: #6a4f00;
+  border-bottom: 1px solid rgba(154, 103, 0, 0.18);
+  font-family: var(--chrome-font);
   font-size: 13px;
+}
+
+.banner-icon {
+  flex: none;
+  opacity: 0.75;
 }
 
 .banner-action {
   margin-left: auto;
-  border: 1px solid #997404;
+  border: 1px solid rgba(154, 103, 0, 0.45);
   border-radius: 6px;
-  padding: 2px 10px;
+  padding: 3px 12px;
   background: transparent;
   color: inherit;
   font: inherit;
+  font-size: 12px;
   cursor: default;
+  transition: background-color var(--dur) ease;
 }
 
 .banner-action:hover {
@@ -396,12 +559,13 @@ body[data-toc-side="left"] nav.toc {
 
 @media (prefers-color-scheme: dark) {
   .banner {
-    background: #4d3800;
+    background: #42350c;
     color: #ffe69c;
+    border-bottom-color: rgba(255, 230, 156, 0.2);
   }
 
   .banner-action {
-    border-color: #ffe69c;
+    border-color: rgba(255, 230, 156, 0.5);
   }
 
   .banner-action:hover {
@@ -445,7 +609,7 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
   background: #ffebe9;
   color: #cf222e;
   font-size: 12px;
-  font-family: -apple-system, sans-serif;
+  font-family: var(--chrome-font);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -455,8 +619,10 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
   }
 }
 
-/* ---- Settings 面板：固定定位遮罩 + 居中卡片。z-index 要压过 #tablist(1)；
-   配色与 tab 条同源（github 变量只在 .markdown-body 上，这里显式给亮/暗值） ---- */
+/* ---- Settings 面板：遮罩微模糊 + 居中卡片，入场缩放淡入。z-index 要压过 #tablist(1)。
+   控件是「原生 input 语义 + macOS 皮」：input 视觉隐藏但保持可聚焦（见 SettingsPanel.tsx），
+   勾选/禁用/焦点态分别经 :has(input:checked) / :disabled / :focus-visible 投影到样式 ---- */
+
 .settings-backdrop {
   position: fixed;
   inset: 0;
@@ -464,29 +630,52 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: settings-fade 150ms ease-out;
 }
 
 .settings-panel {
-  width: 360px;
+  width: 380px;
   max-width: calc(100vw - 32px);
-  padding: 16px 20px 12px;
-  border: 1px solid #d0d7de;
-  border-radius: 10px;
-  background: #fff;
-  color: #1f2328;
-  font-family: -apple-system, sans-serif;
+  padding: 18px 20px 14px;
+  border-radius: 12px;
+  background: var(--panel-bg);
+  color: var(--chrome-fg);
+  font-family: var(--chrome-font);
   font-size: 13px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 0 0 1px var(--chrome-hairline), 0 16px 48px rgba(0, 0, 0, 0.28);
   user-select: none;
   -webkit-user-select: none;
+  animation: settings-pop 160ms ease-out;
+}
+
+@keyframes settings-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes settings-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-backdrop,
+  .settings-panel {
+    animation: none;
+  }
 }
 
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .settings-header h2 {
@@ -496,99 +685,167 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
 }
 
 .settings-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border: 0;
-  padding: 0 6px;
+  padding: 0;
   background: transparent;
-  color: inherit;
-  font-size: 18px;
-  line-height: 1;
-  border-radius: 4px;
+  color: var(--chrome-fg-muted);
+  border-radius: 6px;
+  transition: background-color var(--dur) ease, color var(--dur) ease;
 }
 
 .settings-close:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--chrome-press);
+  color: var(--chrome-fg);
 }
 
 .settings-group {
-  padding: 10px 0;
-  border-top: 1px solid #d8dee4;
+  padding: 12px 0;
+  border-top: 1px solid var(--chrome-hairline);
 }
 
 .settings-group h3 {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #57606a;
+  color: var(--chrome-fg-muted);
 }
 
-.settings-group label {
+/* 视觉隐藏但可聚焦的原生 input：display:none/visibility:hidden 会失去焦点能力，测试与键盘都不允许 */
+.segment > input,
+.switch-row > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 分段控件：凹槽底 + 选中段浮起 */
+.segmented {
+  display: flex;
+  flex: 1;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--control-bg);
+}
+
+.segment {
+  position: relative;
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 5px;
+  transition: background-color var(--dur) ease, box-shadow var(--dur) ease;
 }
 
-.settings-group input {
-  margin: 0;
+.segment:has(input:checked) {
+  background: var(--seg-checked-bg);
+  box-shadow: var(--card-shadow);
+}
+
+.segment:has(input:focus-visible) {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* 开关行：文字左、开关右（System Settings 式） */
+.switch-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.switch-row > span:first-child {
+  flex: 1;
+}
+
+.switch {
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--switch-off-bg);
+  transition: background-color 180ms ease, opacity var(--dur) ease;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  transition: transform 180ms ease;
+}
+
+.switch-row input:checked ~ .switch {
+  background: var(--accent);
+}
+
+.switch-row input:checked ~ .switch::after {
+  transform: translateX(14px);
+}
+
+.switch-row input:focus-visible ~ .switch {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.switch-row input:disabled ~ .switch {
+  opacity: 0.4;
 }
 
 .settings-inline {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 3px 0 3px 24px; /* 与上方复选框文字对齐 */
+  padding: 6px 0 2px;
+  transition: opacity var(--dur) ease;
+}
+
+.settings-inline > span {
+  flex: none;
 }
 
 .settings-inline[aria-disabled="true"] {
-  color: #8c959f;
+  color: var(--chrome-fg-muted);
+}
+
+.settings-inline[aria-disabled="true"] .segmented {
+  opacity: 0.45;
 }
 
 .settings-hint,
 .settings-footer {
-  margin: 4px 0 0 24px;
+  margin: 8px 0 0;
   font-size: 12px;
-  color: #6e7781;
+  color: var(--chrome-fg-muted);
 }
 
 .settings-footer {
   margin: 0;
-  padding-top: 10px;
-  border-top: 1px solid #d8dee4;
+  padding-top: 12px;
+  border-top: 1px solid var(--chrome-hairline);
 }
 
-@media (prefers-color-scheme: dark) {
-  .settings-backdrop {
-    background: rgba(0, 0, 0, 0.5);
-  }
-
-  .settings-panel {
-    border-color: #30363d;
-    background: #161b22;
-    color: #e6edf3;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-  }
-
-  .settings-close:hover {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  .settings-group,
-  .settings-footer {
-    border-color: #30363d;
-  }
-
-  .settings-group h3 {
-    color: #8b949e;
-  }
-
-  .settings-inline[aria-disabled="true"] {
-    color: #6e7681;
-  }
-
-  .settings-hint,
-  .settings-footer {
-    color: #8b949e;
-  }
+/* 键盘可达性：chrome 里的裸按钮给 accent 焦点环（编辑器自身的 outline 由 CM 主题管） */
+.tab-close:focus-visible,
+.settings-close:focus-visible,
+.banner-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

@@ -79,6 +79,10 @@ export function createEditor(opts: EditorOptions): EditorHandle {
       keymap.of([...defaultKeymap, ...historyKeymap]),
       markdown({ codeLanguages: languages }),
       EditorView.lineWrapping,
+      // tabs 布局的顶栏悬浮在内容之上（theme.css --rsmd-header-h，40px 同值）：
+      // scrollIntoView 若把目标行贴到 scroller 顶边会藏进顶栏底下，这里让出同等高度。
+      // 回调每次滚动求值，布局设置切换无需重配置
+      EditorView.scrollMargins.of(() => (document.body.dataset.layout === "tabs" ? { top: 40 } : null)),
       access.of(confFor("preview")),
       theme.of(themeFor(prefersDark())),
       blockWidgets(cache),
