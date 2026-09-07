@@ -4,9 +4,9 @@
 
 use crate::ipc::{
     DocClosedPayload, DocMode, DocOpenedPayload, DocRefPayload, DocUpdatedPayload, Event,
-    ModeMenuPayload, RenderPayload, SaveRequestedPayload,
+    ModeMenuPayload, SaveRequestedPayload,
 };
-use crate::render::{self, BlockRange};
+use crate::render;
 use crate::settings::Settings;
 use crate::watcher::{FileEvent, FileEventKind, FileWatcher};
 use std::path::{Path, PathBuf};
@@ -97,10 +97,8 @@ pub fn request_quit<S: Shell>(shell: &S) -> bool {
     true
 }
 
-struct RenderedDoc {
+struct LoadedDoc {
     text: String,
-    html: String,
-    blocks: Vec<BlockRange>,
     title: String,
     base_dir: String,
     hash: u64,
@@ -115,19 +113,16 @@ fn doc_title(path: &Path, first_heading: Option<String>) -> String {
     })
 }
 
-fn load_and_render(path: &Path) -> Result<RenderedDoc, String> {
+fn load_doc(path: &Path) -> Result<LoadedDoc, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     let hash = content_hash(&bytes);
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let base_dir = path
         .parent()
         .ok_or_else(|| "file has no parent directory".to_string())?;
-    let result = render::render(&text, base_dir);
-    Ok(RenderedDoc {
-        title: doc_title(path, result.first_heading),
+    Ok(LoadedDoc {
+        title: doc_title(path, render::first_heading(&text)),
         text,
-        html: result.html,
-        blocks: result.blocks,
         base_dir: base_dir.to_string_lossy().into_owned(),
         hash,
     })
@@ -202,7 +197,7 @@ pub fn focus_doc<S: Shell>(shell: &S, doc_id: u64) {
     shell.emit(Event::DocumentFocus(DocRefPayload { doc_id }));
 }
 
-/// watcher 回调（非主线程）：重渲并推送；文件消失只通知，内容保留。
+/// watcher 回调（非主线程）：重读并推送；文件消失只通知，内容保留。
 pub fn on_file_event<S: Shell>(shell: &S, ev: FileEvent) {
     let state = shell.state();
     // 锁内只做反查：查不到说明 tab 已关（去抖事件可能晚于关闭落地），忽略
@@ -211,8 +206,8 @@ pub fn on_file_event<S: Shell>(shell: &S, ev: FileEvent) {
     match ev.kind {
         FileEventKind::Modified => {
             // 瞬态读失败（如写入中途）忽略，下一次事件会补上
-            let Ok(r) = load_and_render(&ev.path) else { return };
-            // render 期间 doc 可能已被关闭：存在性检查、title 更新、回声判定同临界区
+            let Ok(r) = load_doc(&ev.path) else { return };
+            // 读文件期间 doc 可能已被关闭：存在性检查、title 更新、回声判定同临界区
             let external = {
                 let mut docs = state.docs.lock().unwrap();
                 let Some(d) = docs.iter_mut().find(|d| d.id == doc_id) else {
@@ -226,8 +221,6 @@ pub fn on_file_event<S: Shell>(shell: &S, ev: FileEvent) {
             shell.emit(Event::DocumentUpdated(DocUpdatedPayload {
                 doc_id,
                 text: r.text,
-                html: r.html,
-                blocks: r.blocks,
                 title: r.title,
                 external,
             }));
@@ -251,7 +244,7 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
         .map_err(|e| format!("Cannot open: {e}"))?;
     let state = shell.state();
 
-    // 第一重检查：判重与插入必须同临界区（见下方第二重检查），读文件/render 不持锁
+    // 第一重检查：判重与插入必须同临界区（见下方第二重检查），读文件不持锁
     let existing = find_doc(&state.docs.lock().unwrap(), &path);
     if let Some(id) = existing {
         if activate {
@@ -260,7 +253,7 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
         return Ok(());
     }
 
-    let rendered = load_and_render(&path)?;
+    let loaded = load_doc(&path)?;
     let watcher_shell = shell.clone();
     let (watcher, watch_failed) =
         match FileWatcher::watch(&path, move |ev| on_file_event(&watcher_shell, ev)) {
@@ -268,7 +261,7 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
             Err(_) => (None, true), // 降级：doc 照常打开，watcher = None
         };
 
-    // 第二重检查：render 期间可能已被并发打开——丢弃本次 render 结果，聚焦已有 tab
+    // 第二重检查：读文件期间可能已被并发打开——丢弃本次读取结果，聚焦已有 tab
     let inserted = {
         let mut docs = state.docs.lock().unwrap();
         match find_doc(&docs, &path) {
@@ -278,9 +271,9 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
                 docs.push(OpenDoc {
                     id,
                     path: path.clone(),
-                    title: rendered.title.clone(),
+                    title: loaded.title.clone(),
                     watcher, // 竞态失败分支不 push：本次 watcher 随作用域 Drop 停止
-                    disk_hash: rendered.hash,
+                    disk_hash: loaded.hash,
                     dirty: false,
                     mode: DocMode::Preview,
                 });
@@ -310,11 +303,9 @@ pub fn open_document<S: Shell>(shell: &S, path: PathBuf, activate: bool) -> Resu
         doc_id,
         path: path.to_string_lossy().into_owned(),
         file_name,
-        text: rendered.text,
-        html: rendered.html,
-        blocks: rendered.blocks,
-        title: rendered.title,
-        base_dir: rendered.base_dir,
+        text: loaded.text,
+        title: loaded.title,
+        base_dir: loaded.base_dir,
         activate,
     }));
     if watch_failed {
@@ -471,32 +462,6 @@ fn path_of(state: &AppState, doc_id: u64) -> Result<PathBuf, String> {
         .ok_or_else(|| "Document is no longer open".to_string())
 }
 
-/// 编辑中的按需渲染：用文档目录解析相对图片路径；顺带更新 title（active 时同步原生标题）。
-pub fn render_markdown<S: Shell>(
-    shell: &S,
-    doc_id: u64,
-    text: &str,
-) -> Result<RenderPayload, String> {
-    let state = shell.state();
-    let path = path_of(state, doc_id)?;
-    let base_dir = path
-        .parent()
-        .ok_or_else(|| "file has no parent directory".to_string())?;
-    let result = render::render(text, base_dir);
-    let title = doc_title(&path, result.first_heading);
-    if let Some(d) = state.docs.lock().unwrap().iter_mut().find(|d| d.id == doc_id) {
-        d.title = title.clone();
-    }
-    if *state.active.lock().unwrap() == Some(doc_id) {
-        sync_title(shell);
-    }
-    Ok(RenderPayload {
-        html: result.html,
-        blocks: result.blocks,
-        title,
-    })
-}
-
 /// 原地写而非临时文件 + rename：保留 inode / 权限 / xattr；路径已 canonicalize，不会覆盖符号链接本身。
 /// 写入期间 watcher 可能收到事件，但 200ms 防抖后再读时写已完成，hash 判定为回声。
 pub fn save_doc<S: Shell>(shell: &S, doc_id: u64, text: &str) -> Result<(), String> {
@@ -504,17 +469,19 @@ pub fn save_doc<S: Shell>(shell: &S, doc_id: u64, text: &str) -> Result<(), Stri
     let path = path_of(state, doc_id)?;
     std::fs::write(&path, text.as_bytes()).map_err(|e| format!("Failed to save: {e}"))?;
     let hash = content_hash(text.as_bytes());
+    let title = doc_title(&path, render::first_heading(text));
     if let Some(d) = state.docs.lock().unwrap().iter_mut().find(|d| d.id == doc_id) {
         d.disk_hash = hash;
         d.dirty = false;
+        d.title = title;
     }
     sync_title(shell);
     shell.refresh_menu();
     Ok(())
 }
 
-/// 前端在 mode / dirty 变化时回写；驱动标题 ●、模式菜单勾选、Save enable。
-pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, mode: DocMode, dirty: bool) {
+/// 前端在 mode / dirty 变化与打字后回写；title 有值则更新（打字中的首标题）。驱动标题 ●、模式菜单勾选、Save enable。
+pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, mode: DocMode, dirty: bool, title: Option<String>) {
     let state = shell.state();
     let found = {
         let mut docs = state.docs.lock().unwrap();
@@ -522,6 +489,9 @@ pub fn set_doc_state<S: Shell>(shell: &S, doc_id: u64, mode: DocMode, dirty: boo
             Some(d) => {
                 d.mode = mode;
                 d.dirty = dirty;
+                if let Some(t) = title {
+                    d.title = t;
+                }
                 true
             }
             None => false,
@@ -995,12 +965,12 @@ mod tests {
     // ---- 纯函数 ----
 
     #[test]
-    fn load_and_render_produces_payload() {
+    fn load_doc_produces_text_and_title() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.md");
         fs::write(&file, "# Hi\n\nbody").unwrap();
-        let p = load_and_render(&file).unwrap();
-        assert!(p.html.contains("Hi"));
+        let p = load_doc(&file).unwrap();
+        assert_eq!(p.text, "# Hi\n\nbody");
         assert_eq!(p.title, "Hi");
         assert_eq!(p.base_dir, dir.path().to_string_lossy());
     }
@@ -1010,21 +980,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("my-note.md");
         fs::write(&file, "no heading here").unwrap();
-        assert_eq!(load_and_render(&file).unwrap().title, "my-note");
+        assert_eq!(load_doc(&file).unwrap().title, "my-note");
     }
 
     #[test]
-    fn non_utf8_is_rendered_lossily() {
+    fn non_utf8_is_read_lossily() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("bad.md");
         fs::write(&file, [b'o', b'k', 0xFF, 0xFE, b'!']).unwrap();
-        let p = load_and_render(&file).unwrap();
-        assert!(p.html.contains("ok"));
+        let p = load_doc(&file).unwrap();
+        assert!(p.text.starts_with("ok"));
     }
 
     #[test]
     fn missing_file_is_error() {
-        assert!(load_and_render(Path::new("/no/such.md")).is_err());
+        assert!(load_doc(Path::new("/no/such.md")).is_err());
     }
 
     #[test]
@@ -1114,7 +1084,6 @@ mod tests {
         };
         assert!(!p.external);
         assert_eq!(p.text, "# A\n\nbody");
-        assert_eq!(p.blocks.len(), 2);
     }
 
     #[test]
@@ -1152,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn opened_payload_carries_text_and_blocks() {
+    fn opened_payload_carries_text() {
         let dir = tempfile::tempdir().unwrap();
         let a = md(dir.path(), "a.md", "# A\n\nbody");
         let sh = Fake::default();
@@ -1160,7 +1129,6 @@ mod tests {
         let evs = sh.events();
         let p = opened(&evs[0]).unwrap();
         assert_eq!(p.text, "# A\n\nbody");
-        assert_eq!(p.blocks.iter().map(|b| b.from).collect::<Vec<_>>(), vec![1, 3]);
         assert_eq!(
             sh.state.docs.lock().unwrap()[0].disk_hash,
             content_hash(b"# A\n\nbody")
@@ -1179,7 +1147,7 @@ mod tests {
         assert_eq!(sh.titles().last().unwrap(), "● A");
     }
 
-    // ---- render_markdown / save_doc / set_doc_state（Task 3）----
+    // ---- save_doc / set_doc_state（Task 3）----
 
     #[test]
     fn save_doc_writes_the_file_clears_dirty_and_updates_baseline() {
@@ -1188,7 +1156,7 @@ mod tests {
         let sh = Fake::default();
         open_document(&sh, a.clone(), true).unwrap();
         let id = sh.ids()[0];
-        set_doc_state(&sh, id, DocMode::Live, true);
+        set_doc_state(&sh, id, DocMode::Live, true, None);
         assert_eq!(sh.titles().last().unwrap(), "● A");
 
         save_doc(&sh, id, "# A\n\nsaved").unwrap();
@@ -1209,24 +1177,6 @@ mod tests {
     }
 
     #[test]
-    fn render_markdown_rerenders_and_retitles_the_active_doc() {
-        let dir = tempfile::tempdir().unwrap();
-        let a = md(dir.path(), "a.md", "# A");
-        let sh = Fake::default();
-        open_document(&sh, a, true).unwrap();
-        let id = sh.ids()[0];
-
-        let p = render_markdown(&sh, id, "# Renamed\n\n![](img.png)").unwrap();
-
-        assert_eq!(p.title, "Renamed");
-        assert_eq!(p.blocks.len(), 2);
-        assert!(p.html.contains("img.png")); // 相对图片路径按该文档目录改写
-        assert_eq!(sh.title_of(id), "Renamed");
-        assert_eq!(sh.titles().last().unwrap(), "Renamed");
-        assert!(render_markdown(&sh, 99, "x").is_err());
-    }
-
-    #[test]
     fn set_doc_state_refreshes_menu_and_title() {
         let dir = tempfile::tempdir().unwrap();
         let a = md(dir.path(), "a.md", "# A");
@@ -1236,12 +1186,38 @@ mod tests {
         assert_eq!(sh.state.docs.lock().unwrap()[0].mode, DocMode::Preview); // 新开文档默认 preview
         let before = sh.menu_refreshes.load(Ordering::SeqCst);
 
-        set_doc_state(&sh, id, DocMode::Source, false);
+        set_doc_state(&sh, id, DocMode::Source, false, None);
 
         assert_eq!(sh.menu_refreshes.load(Ordering::SeqCst), before + 1);
         let docs = sh.state.docs.lock().unwrap();
         assert_eq!(docs[0].mode, DocMode::Source);
         assert!(!docs[0].dirty);
+    }
+
+    #[test]
+    fn set_doc_state_with_title_updates_the_native_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let id = sh.ids()[0];
+        set_doc_state(&sh, id, DocMode::Live, true, Some("Renamed".into()));
+        assert_eq!(sh.title_of(id), "Renamed");
+        assert_eq!(sh.titles().last().unwrap(), "● Renamed");
+        set_doc_state(&sh, id, DocMode::Live, true, None); // None = 沿用
+        assert_eq!(sh.title_of(id), "Renamed");
+    }
+
+    #[test]
+    fn save_doc_retitles_from_the_saved_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = md(dir.path(), "a.md", "# A");
+        let sh = Fake::default();
+        open_document(&sh, a, true).unwrap();
+        let id = sh.ids()[0];
+        save_doc(&sh, id, "# Saved\n\nbody").unwrap();
+        assert_eq!(sh.title_of(id), "Saved");
+        assert_eq!(sh.titles().last().unwrap(), "Saved");
     }
 
     // ---- 脏文档关闭 / 退出守卫（Task 4）----
@@ -1250,7 +1226,7 @@ mod tests {
         let p = md(dir, name, "# A");
         open_document(sh, p, true).unwrap();
         let id = *sh.ids().last().unwrap();
-        set_doc_state(sh, id, DocMode::Live, true);
+        set_doc_state(sh, id, DocMode::Live, true, None);
         id
     }
 

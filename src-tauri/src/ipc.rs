@@ -1,7 +1,6 @@
 //! Rust → 前端 的事件契约：载荷 DTO 与事件枚举，事件名只在这里出现一次。
 //! 前端镜像见 `src/ipc.ts`（serde camelCase）。
 
-use crate::render::BlockRange;
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -24,8 +23,6 @@ pub struct DocOpenedPayload {
     pub path: String,
     pub file_name: String,
     pub text: String, // 编辑器初始内容（唯一真相）
-    pub html: String, // 整页渲染，前端按 blocks 切成 widget
-    pub blocks: Vec<BlockRange>,
     pub title: String,
     pub base_dir: String,
     // 批量打开只有首个成功的文档为 true：前端据此决定是否设 active 并立即渲染，
@@ -38,8 +35,6 @@ pub struct DocOpenedPayload {
 pub struct DocUpdatedPayload {
     pub doc_id: u64,
     pub text: String,
-    pub html: String,
-    pub blocks: Vec<BlockRange>,
     pub title: String,
     // false = 内容 hash 与我们最近一次看到/写入的一致（自己保存的回声或无实质变化）
     pub external: bool,
@@ -57,15 +52,6 @@ pub struct DocClosedPayload {
 #[serde(rename_all = "camelCase")]
 pub struct DocRefPayload {
     pub doc_id: u64,
-}
-
-/// `render_markdown` 命令的返回值（不是事件）。
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderPayload {
-    pub html: String,
-    pub blocks: Vec<BlockRange>,
-    pub title: String,
 }
 
 /// 菜单 Save / 关闭脏文档时选择 Save：让前端把编辑器文本交回 `save_doc`。

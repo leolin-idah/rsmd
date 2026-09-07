@@ -9,7 +9,7 @@ import { useShellStore } from "../store";
 function closePanel(): void {
   const store = useShellStore.getState();
   store.closeSettings();
-  if (store.active !== null) editorFor(store.active)?.view.focus();
+  if (store.active !== null) editorFor(store.active)?.focus();
 }
 
 // 面板是 store.settings 的纯投影：改值先写 store（勾选零延迟，body.dataset 投影同步跟随），

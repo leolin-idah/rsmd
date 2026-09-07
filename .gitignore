@@ -6,3 +6,6 @@ src-tauri/gen/schemas/
 tmp/
 .superpowers/
 .DS_Store
+
+# 性能门（Task 3）的生成文档，Task 20 结束后删除
+perf/fixtures/

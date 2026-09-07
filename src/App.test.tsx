@@ -13,6 +13,7 @@ vi.mock("./preview/document", () => ({
   attachHost: vi.fn(),
   editorFor: () => null,
   reloadFromDisk: reload.reloadFromDisk,
+  setDocMode: vi.fn(),
 }));
 
 import App from "./App";
@@ -44,6 +45,7 @@ describe("App shell", () => {
       error: null,
       dirty: {},
       modes: {},
+      stats: {},
       conflicts: {},
       settings: null,
       settingsOpen: false,
@@ -67,6 +69,10 @@ describe("App shell", () => {
   });
 
   const tabEls = () => Array.from(container.querySelectorAll<HTMLElement>(".tab"));
+
+  it("renders the status bar as the last child of #main", () => {
+    expect(container.querySelector("#main > #statusbar:last-child")).not.toBeNull();
+  });
 
   it("removes the welcome text before the next paint (no macrotask needed)", async () => {
     expect(container.querySelector(".welcome")).not.toBeNull();

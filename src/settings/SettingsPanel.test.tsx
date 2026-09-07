@@ -10,7 +10,7 @@ vi.mock("../ipc", () => ipc);
 
 const editor = vi.hoisted(() => ({ focus: vi.fn() }));
 vi.mock("../preview/document", () => ({
-  editorFor: (docId: number) => (docId === 1 ? { view: { focus: editor.focus } } : null),
+  editorFor: (docId: number) => (docId === 1 ? { focus: editor.focus } : null),
 }));
 
 import { SettingsPanel } from "./SettingsPanel";

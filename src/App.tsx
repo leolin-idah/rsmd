@@ -1,5 +1,6 @@
 import { PreviewPane } from "./preview/PreviewPane";
 import { reloadFromDisk } from "./preview/document";
+import { StatusBar } from "./StatusBar";
 import { TabBar } from "./TabBar";
 import { SettingsPanel } from "./settings/SettingsPanel";
 import { useShallow } from "zustand/react/shallow";
@@ -66,6 +67,7 @@ export default function App() {
           </div>
         )}
         <PreviewPane />
+        <StatusBar />
       </div>
       {settingsOpen && <SettingsPanel />}
     </div>

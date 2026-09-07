@@ -31,9 +31,8 @@ function base(p: Palette, dark: boolean): Extension {
       "&": { backgroundColor: p.bg, color: p.fg, height: "100%" },
       // 行高取 theme.css 的 --rsmd-line-height：渲染块的 .markdown-body 用同一个变量，两者必须同值
       ".cm-scroller": { overflow: "auto", justifyContent: "center", fontFamily: FONT, fontSize: "16px", lineHeight: "var(--rsmd-line-height)" },
-      // 顶部内边距走 --rsmd-content-pad-top：tabs 布局的顶栏是悬浮玻璃层（theme.css），
-      // 内容要从它底下穿过，起始位置由该变量抬高；sideList 布局回落到 32px
-      ".cm-content": { flex: "0 1 860px", minWidth: "0", maxWidth: "860px", boxSizing: "border-box", padding: "var(--rsmd-content-pad-top, 32px) 24px 32px", caretColor: p.fg },
+      // 与 theme.css 的 .milkdown .ProseMirror 同边距：切模式版面不跳
+      ".cm-content": { flex: "0 1 860px", minWidth: "0", maxWidth: "860px", boxSizing: "border-box", padding: "32px 24px", caretColor: p.fg },
       "&.cm-focused": { outline: "none" },
       ".cm-line": { padding: "0" },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: p.fg },

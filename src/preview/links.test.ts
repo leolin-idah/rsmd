@@ -6,13 +6,10 @@ const ipc = vi.hoisted(() => ({
 }));
 vi.mock("../ipc", () => ipc);
 
-const editor = vi.hoisted(() => ({
-  scrollToLine: vi.fn(),
-  headings: () => [{ id: "intro", line: 12 }],
-}));
+const editor = vi.hoisted(() => ({ scrollToAnchor: vi.fn() }));
 vi.mock("./document", () => ({ editorFor: (docId: number) => (docId === 7 ? editor : null) }));
 
-import { installLinkHandler } from "./links";
+import { followLink, installLinkHandler } from "./links";
 import { useShellStore } from "../store";
 
 function addPane(host: HTMLElement, docId: number, inner = ""): HTMLElement {
@@ -70,20 +67,43 @@ describe("installLinkHandler", () => {
     expect(useShellStore.getState().error).toBe("Cannot open: missing.md");
   });
 
-  it("scrolls anchors via the pane's editor heading index (target may not be in the DOM)", () => {
-    click(pane, "#intro");
-    expect(editor.scrollToLine).toHaveBeenCalledWith(12);
+  it("opens mailto: and tel: links through the system handler", () => {
+    click(pane, "mailto:a@b.c");
+    expect(ipc.openExternal).toHaveBeenCalledWith("mailto:a@b.c");
+    click(pane, "tel:+123");
+    expect(ipc.openExternal).toHaveBeenCalledWith("tel:+123");
   });
 
-  it("ignores anchors whose heading is unknown to the editor", () => {
-    click(pane, "#nope");
-    expect(editor.scrollToLine).not.toHaveBeenCalled();
+  it("prevents the default navigation for hrefs it cannot follow", () => {
+    // 相对图片 / 非 md 文件 / 被净化成空串的 javascript: 链接：放行会让 WKWebView 做顶层跳转，
+    // 整个前端被换掉且回不来
+    for (const href of ["./pic.png", "LICENSE", ""]) {
+      const a = document.createElement("a");
+      a.setAttribute("href", href);
+      pane.appendChild(a);
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+      a.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(true);
+    }
+    expect(ipc.openExternal).not.toHaveBeenCalled();
+    expect(ipc.openRelative).not.toHaveBeenCalled();
+    expect(editor.scrollToAnchor).not.toHaveBeenCalled();
+  });
+
+  it("scrolls anchors through the pane's editor", () => {
+    click(pane, "#intro");
+    expect(editor.scrollToAnchor).toHaveBeenCalledWith("intro");
+  });
+
+  it("decodes percent-escaped anchors", () => {
+    click(pane, "#%E6%A6%82%E8%BF%B0");
+    expect(editor.scrollToAnchor).toHaveBeenCalledWith("概述");
   });
 
   it("in edit mode a plain click on a link inside a rendered block is left to the editor; ⌘+click follows it", () => {
     useShellStore.setState({ modes: { 7: "live" } });
     const block = document.createElement("div");
-    block.className = "rsmd-block";
+    block.className = "ProseMirror";
     pane.appendChild(block);
     const a = document.createElement("a");
     a.setAttribute("href", "https://example.com");
@@ -99,7 +119,7 @@ describe("installLinkHandler", () => {
   it("in edit mode links outside rendered blocks (e.g. the TOC) still work on plain click", () => {
     useShellStore.setState({ modes: { 7: "live" } });
     click(pane, "#intro");
-    expect(editor.scrollToLine).toHaveBeenCalledWith(12);
+    expect(editor.scrollToAnchor).toHaveBeenCalledWith("intro");
   });
 
   it("ignores links outside any pane", () => {
@@ -116,5 +136,12 @@ describe("installLinkHandler", () => {
     installLinkHandler(host);
     click(pane, "https://example.com");
     expect(ipc.openExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it("followLink reports whether it handled the href", () => {
+    expect(followLink(7, "https://example.com")).toBe(true);
+    expect(followLink(7, "#x")).toBe(true);
+    expect(editor.scrollToAnchor).toHaveBeenCalledWith("x");
+    expect(followLink(7, "./pic.png")).toBe(false);
   });
 });

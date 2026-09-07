@@ -22,29 +22,11 @@ export interface Settings {
   wrapCode: boolean; // 代码块换行显示，而非块内横滚
 }
 
-export type BlockKind = "node" | "html" | "footnote";
-
-/// 顶层块的源码行范围（1-based，含首尾），镜像 render.rs 的 BlockRange
-export interface BlockRange {
-  from: number;
-  to: number;
-  kind: BlockKind;
-}
-
-/// render_markdown 命令的返回值
-export interface RenderPayload {
-  html: string;
-  blocks: BlockRange[];
-  title: string;
-}
-
 export interface DocOpenedPayload {
   docId: DocId;
   path: string;
   fileName: string;
   text: string;
-  html: string;
-  blocks: BlockRange[];
   title: string;
   baseDir: string;
   // 批量打开时只有首个成功的文档为 true；false = 后台待命，不设 active、不渲染
@@ -54,8 +36,6 @@ export interface DocOpenedPayload {
 export interface DocUpdatedPayload {
   docId: DocId;
   text: string;
-  html: string;
-  blocks: BlockRange[];
   title: string;
   // false = 内容与我们最近一次看到/写入的一致（自己保存的回声）
   external: boolean;
@@ -133,14 +113,12 @@ export const setSettings = (settings: Settings): Promise<void> =>
 
 export const frontendReady = (): Promise<void> => invoke("frontend_ready");
 
-export const renderMarkdown = (docId: DocId, text: string): Promise<RenderPayload> =>
-  invoke<RenderPayload>("render_markdown", { docId, text });
-
 export const saveDoc = (docId: DocId, text: string): Promise<void> =>
   invoke("save_doc", { docId, text });
 
-export const setDocState = (docId: DocId, mode: DocMode, dirty: boolean): Promise<void> =>
-  invoke("set_doc_state", { docId, mode, dirty });
+/// mode / dirty 变化与打字后的标题一起回写；title 为空表示"沿用 Rust 侧现值"
+export const setDocState = (docId: DocId, mode: DocMode, dirty: boolean, title?: string): Promise<void> =>
+  invoke("set_doc_state", { docId, mode, dirty, title: title ?? null });
 
 // ---- 平台 API ----
 

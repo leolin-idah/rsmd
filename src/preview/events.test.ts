@@ -108,8 +108,6 @@ describe("initTauriBridge", () => {
     const payload = {
       ...meta(1),
       text: "# T",
-      html: "<h1/>",
-      blocks: [{ from: 1, to: 1, kind: "node" as const }],
       title: "T",
       baseDir: "/x",
       activate: true,
@@ -122,8 +120,6 @@ describe("initTauriBridge", () => {
     const payload = {
       docId: 1,
       text: "2",
-      html: "<p>2</p>",
-      blocks: [],
       title: "T2",
       external: true,
     };

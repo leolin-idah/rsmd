@@ -16,6 +16,8 @@
   --rsmd-block-gap: 20px;
 
   --accent: #007aff;
+  /* 正文选区底色：与 editor/theme.ts 里 CM 的 selection 同值，两个视图选同一段文字颜色一致 */
+  --accent-selection: #b6d7ff;
   --chrome-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --chrome-bg: #f0efee;
   --chrome-fg: #1d1d1f;
@@ -23,6 +25,8 @@
   --chrome-hairline: rgba(0, 0, 0, 0.09);
   --chrome-hover: rgba(0, 0, 0, 0.05);
   --chrome-press: rgba(0, 0, 0, 0.09);
+  /* 浮条里输入框的凹底（链接浮条 / 公式弹窗） */
+  --chrome-input-bg: rgba(0, 0, 0, 0.04);
   --card-bg: #ffffff;
   --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
   --seg-checked-bg: #ffffff;
@@ -32,19 +36,20 @@
   --warn-dot: #bf8700;
   --dur: 120ms;
   --rsmd-header-h: 40px;
-  /* 悬浮顶栏的玻璃底：backdrop-filter 之上要留足不透明度，否则正文滚过时文字透出来发花 */
-  --chrome-glass: rgba(240, 239, 238, 0.75);
+  --rsmd-statusbar-h: 24px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --accent: #0a84ff;
+    --accent-selection: #264f78;
     --chrome-bg: #161b22;
     --chrome-fg: #e6edf3;
     --chrome-fg-muted: rgba(235, 235, 245, 0.55);
     --chrome-hairline: rgba(255, 255, 255, 0.09);
     --chrome-hover: rgba(255, 255, 255, 0.06);
     --chrome-press: rgba(255, 255, 255, 0.11);
+    --chrome-input-bg: rgba(255, 255, 255, 0.06);
     --card-bg: #262c36;
     --card-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.4);
     --seg-checked-bg: #4b525d;
@@ -52,7 +57,6 @@
     --switch-off-bg: rgba(120, 120, 128, 0.4);
     --panel-bg: #20252d;
     --warn-dot: #d29922;
-    --chrome-glass: rgba(22, 27, 34, 0.72);
   }
 }
 
@@ -80,7 +84,7 @@ body {
 #shell {
   display: flex;
   height: 100%;
-  position: relative; /* tabs 布局下 #tablist 绝对定位悬浮于此 */
+  position: relative;
 }
 
 body[data-layout="tabs"] #shell {
@@ -105,8 +109,8 @@ body[data-layout="sideList"] #shell {
   min-height: 0;
 }
 
-/* 每文档常驻一个 pane，切换只改 display。滚动容器是 CodeMirror 的 .cm-scroller（在 pane 内），
-   pane 本身不滚；flex 两列：编辑器列 + TOC 列 */
+/* 每文档常驻一个 pane，切换只改 display。滚动容器在 pane 内部：preview / live 是 .milkdown 自身，
+   source 是 CodeMirror 的 .cm-scroller；pane 本身不滚。flex 两列：编辑器列 + TOC 列 */
 .pane {
   height: 100%;
   overflow: hidden;
@@ -114,73 +118,102 @@ body[data-layout="sideList"] #shell {
   align-items: stretch;
 }
 
+/* 两个编辑视图并存于 pane，同一时刻只显示一个：.milkdown（preview / live，自身滚动，
+   source 模式下由 mdEditor 置 hidden——所以这里不能写 display）与 .cm-editor（source，.cm-scroller 滚动） */
+.pane > .milkdown,
 .pane > .cm-editor {
   flex: 1;
   min-width: 0;
   height: 100%;
 }
 
-/* 渲染块：github-markdown-css 提供排版；内边距/底色由 .cm-content 统一负责。
-   position: relative 让每个块成为自己的 selection root，跨块选区高亮不会铺满窗口。
-   块间距必须是 widget 盒内的 padding：每个 widget 只装一个顶层元素，github-markdown-css 的
-   >*:first-child / >*:last-child 会把它的外边距清零；而 CM 的高度图按 widget 盒测量，
-   外边距若穿透盒子会让 lineBlockAt().top 与滚动估算漂移。间距沿用 github 的折叠后节奏，
-   只是基准换成 --rsmd-block-gap：普通块下方一档；标题上方多半档；分隔线上下各一档半。
-   white-space 必须重置：.cm-content 是 white-space: pre，comrak 输出里 <tr>/<li> 之间的换行
-   若被继承会渲染成空行，表格行与列表项之间出现大片空隙 */
-.cm-content .markdown-body.rsmd-block {
-  padding: 0 0 var(--rsmd-block-gap);
+.pane > .milkdown {
+  overflow: auto;
+}
+
+/* 内容列与 .cm-content 同宽同边距（editor/theme.ts）：切模式版面不跳 */
+.milkdown .ProseMirror {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  box-sizing: border-box;
+  outline: none;
+  line-height: var(--rsmd-line-height);
   background: transparent;
-  position: relative;
-  white-space: normal;
+  white-space: pre-wrap; /* ProseMirror 需要保留空白，github-markdown-css 的 pre 另有规则 */
+  word-break: break-word;
 }
 
-/* 标题上方额外留半档：与 github「标题 margin-top 比正文间距多半档」的节奏一致 */
-.cm-content .markdown-body.rsmd-block:has(> h1, > h2, > h3, > h4, > h5, > h6) {
-  padding-top: calc(var(--rsmd-block-gap) / 2);
+.milkdown .ProseMirror[contenteditable="false"] {
+  caret-color: transparent;
 }
 
-.cm-content .markdown-body.rsmd-block:has(> hr) {
-  padding: calc(var(--rsmd-block-gap) / 2) 0 calc(var(--rsmd-block-gap) * 1.5);
+/* 锚点 / TOC 跳转后标题停在距顶 48px，与 toc.ts pickCurrent 的阈值 49 配对 */
+.milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: calc(var(--rsmd-header-h) + 8px);
 }
 
-/* 块「内部」的行距与段距同样放宽：一个 widget 里可能装着多段（引用块）、多项（列表）、多行单元格（表格）。
-   :not(:last-child) 不能省——github-markdown-css 靠 >*:last-child 把顶层元素的下外边距清零，
-   而这里的选择器多一个元素名，特异性反而更高；若把最后一个元素也算进来，外边距会穿透 widget 盒，
-   CM 的高度图按盒测量，lineBlockAt().top 与滚动估算就会漂移（同上方 rsmd-block 的说明）。 */
-.cm-content .markdown-body {
+.milkdown .ProseMirror ::selection {
+  background: var(--accent-selection);
+}
+
+.milkdown .ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  border-radius: 4px;
+}
+
+/* 块间距与块内节奏：github-markdown-css 照搬 GitHub 网页的紧凑值（块间 16px），基准换成
+   --rsmd-block-gap 整体放宽一档。:not(:last-child) 不能省——markdown-body 的 >*:last-child
+   只清顶层元素的下外边距，嵌套层（引用块里的段落、单元格里的段落）要靠它自己收尾，
+   否则块末会多出一档空白 */
+.milkdown .markdown-body {
   line-height: var(--rsmd-line-height);
 }
 
-.cm-content .markdown-body :is(p, blockquote, ul, ol, dl, table, pre, details):not(:last-child) {
+.milkdown .markdown-body :is(p, blockquote, ul, ol, dl, table, pre, details):not(:last-child) {
   margin-bottom: var(--rsmd-block-gap);
 }
 
-.cm-content .markdown-body li > p {
-  margin-top: var(--rsmd-block-gap);
+/* 列表项的内容包在 .rsmd-li-content 里（任务框节点视图，plugins/gfmExtras.ts），
+   github-markdown-css 的 li>p 与 >*:last-child 都不再命中；而 ProseMirror 里紧凑列表项
+   同样含一个 paragraph，段落自带的下外边距会让每项都拖一档空白，这里首尾自己清零。
+   项内多段（loose list）的间距仍由上面的 :not(:last-child) 给 */
+.milkdown .markdown-body .rsmd-li-content > :first-child {
+  margin-top: 0;
 }
 
-.cm-content .markdown-body li + li {
+.milkdown .markdown-body .rsmd-li-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* 紧凑嵌套列表：项内段落紧跟子列表时不留块间距（GitHub 的紧凑列表就是这个观感），
+   项内真的分了两段（loose list）时才由上面的 :not(:last-child) 给一档 */
+.milkdown .markdown-body .rsmd-li-content > p:has(+ ul),
+.milkdown .markdown-body .rsmd-li-content > p:has(+ ol) {
+  margin-bottom: 0;
+}
+
+.milkdown .markdown-body li + li {
   margin-top: 0.4em;
 }
 
 /* ---- 正文轻度打磨：字距 / hairline / 圆角，不碰行高与块间距机制 ---- */
 
-.cm-content .markdown-body :is(h1, h2, h3) {
+.milkdown .markdown-body :is(h1, h2, h3) {
   letter-spacing: -0.015em;
 }
 
 /* github 的 h1/h2 下划线偏重，柔化成 hairline */
-.cm-content .markdown-body :is(h1, h2) {
+.milkdown .markdown-body :is(h1, h2) {
   border-bottom-color: rgba(31, 35, 40, 0.09);
 }
 
-.cm-content .markdown-body pre {
+.milkdown .markdown-body pre {
   border-radius: 8px;
 }
 
 @media (prefers-color-scheme: dark) {
-  .cm-content .markdown-body :is(h1, h2) {
+  .milkdown .markdown-body :is(h1, h2) {
     border-bottom-color: rgba(230, 237, 243, 0.1);
   }
 }
@@ -216,13 +249,7 @@ body[data-layout="sideList"] #shell {
 }
 
 body[data-layout="tabs"] #tablist {
-  /* 悬浮于内容之上：正文从底下穿过，玻璃效果才有东西可模糊。
-     让位关系：--rsmd-content-pad-top 抬高 .cm-content 顶边距（editor/theme.ts），
-     nav.toc / .banner 各自加同量偏移，editor 的 scrollMargins 让出同高（markdownEditor.ts） */
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  /* 静态占位而非悬浮层：滚动容器从顶栏下沿开始，滚动条才完整可见（悬浮会盖住滚动条顶端 40px） */
   flex-direction: row;
   align-items: center;
   /* 40px = 红绿灯(12px 按钮 + y14 边距)垂直居中的标题栏高度；空 tab 条也保持此高 */
@@ -231,24 +258,6 @@ body[data-layout="tabs"] #tablist {
   overflow-x: auto;
   /* 两层：先一条不模糊的 1px hairline 把边界压实，再叠柔和阴影；都画在盒外，不占条高 */
   box-shadow: 0 1px 0 var(--chrome-hairline), 0 1px 3px rgba(0, 0, 0, 0.07);
-}
-
-/* 玻璃只在支持 backdrop-filter 时启用，否则保持 #tablist 的实色底 */
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  body[data-layout="tabs"] #tablist {
-    background: var(--chrome-glass);
-    -webkit-backdrop-filter: blur(18px) saturate(1.6);
-    backdrop-filter: blur(18px) saturate(1.6);
-  }
-}
-
-/* 顶栏悬浮后由内容侧让位：正文顶边距 = 顶栏 + 原 32px 节奏 */
-body[data-layout="tabs"] #main {
-  --rsmd-content-pad-top: calc(var(--rsmd-header-h) + 32px);
-}
-
-body[data-layout="tabs"] .banner {
-  margin-top: var(--rsmd-header-h);
 }
 
 body[data-layout="sideList"] #tablist {
@@ -397,6 +406,9 @@ body[data-layout="sideList"] .tab.active {
 
 nav.toc {
   flex: none;
+  /* 永远排在编辑器列之后：pane 里的 DOM 顺序不稳定——CM 是进 source 模式才懒建并追加到
+     pane 末尾（editor/mdEditor.ts），此时它反而排在 nav.toc 后面；order 让侧栏与 DOM 顺序脱钩 */
+  order: 1;
   width: 220px;
   box-sizing: border-box;
   height: 100%;
@@ -422,11 +434,6 @@ body[data-toc="off"] nav.toc {
 body[data-toc-side="left"] nav.toc {
   order: -1;
   padding: 32px 0 32px 12px;
-}
-
-/* 悬浮顶栏下 TOC 顶部同步让位（在 toc-side 的 padding 简写之后声明才生效） */
-body[data-layout="tabs"] nav.toc {
-  padding-top: calc(var(--rsmd-header-h) + 32px);
 }
 
 .toc ul {
@@ -462,7 +469,7 @@ body[data-layout="tabs"] nav.toc {
 
 .welcome {
   position: absolute;
-  inset: 0;
+  inset: 0 0 var(--rsmd-statusbar-h); /* 底部让出状态栏，空态内容在正文区居中 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -579,11 +586,143 @@ body[data-layout="tabs"] nav.toc {
   overflow: auto hidden;
 }
 
+/* ---- 可预览块（math_block / mermaid）：光标在内露源码，离开显示渲染结果 ---- */
+.rsmd-preview-block {
+  position: relative;
+  margin: 0 0 var(--rsmd-block-gap);
+}
+
+.rsmd-preview-block__preview {
+  text-align: center;
+  overflow: auto hidden;
+}
+
+.rsmd-preview-block[data-editing="false"] > .rsmd-preview-block__source,
+.rsmd-preview-block[data-editing="true"] > .rsmd-preview-block__preview {
+  display: none;
+}
+
+/* 特异性要盖过 github-markdown-css 的 `.markdown-body pre`（它给 pre 留了 16px 下外边距） */
+.milkdown .markdown-body .rsmd-preview-block__source {
+  margin: 0;
+}
+
+.rsmd-preview-block__preview[data-error],
+.rsmd-math-inline[data-error] {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #ffebe9;
+  color: #cf222e;
+  font-size: 12px;
+  font-family: var(--chrome-font);
+  text-align: left;
+}
+
+.rsmd-math-inline {
+  display: inline-block;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+.milkdown .ProseMirror[contenteditable="true"] .rsmd-math-inline:hover {
+  background: var(--chrome-hover);
+  cursor: pointer;
+}
+
+img.rsmd-image[data-error="true"] {
+  font-style: italic;
+  color: var(--chrome-fg-muted);
+}
+
+/* front matter：弱化的源码块 */
+.rsmd-frontmatter {
+  opacity: 0.7;
+  font-size: 85%;
+}
+
+/* 原生 HTML：不渲染，显示为等宽源码（设计 §1.4 前提） */
+.milkdown .ProseMirror span[data-type="html"] {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 85%;
+  background: rgba(175, 184, 193, 0.2);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* 脚注：就地渲染的 dl 做成 GitHub 式小字列表。dt 绝对定位在左槽里，
+   margin / padding / font-style 都要显式清——github-markdown-css 的 `dl dt` `dl dd`
+   给了斜体、上外边距与左右内边距，落在这个版式上会把标号推下去、正文再缩进一截 */
+.milkdown .ProseMirror dl[data-type="footnote_definition"] {
+  font-size: 85%;
+  color: var(--chrome-fg-muted);
+  margin: 0 0 var(--rsmd-block-gap);
+  padding-left: 1.5em;
+  position: relative;
+}
+
+.milkdown .ProseMirror dl[data-type="footnote_definition"] > dt {
+  position: absolute;
+  left: 0;
+  margin: 0;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.milkdown .ProseMirror dl[data-type="footnote_definition"] > dt::after {
+  content: ".";
+}
+
+.milkdown .ProseMirror dl[data-type="footnote_definition"] > dd {
+  margin: 0;
+  padding: 0;
+}
+
+.milkdown .ProseMirror dl[data-type="footnote_definition"] > dd > :last-child {
+  margin-bottom: 0;
+}
+
+.milkdown .ProseMirror sup[data-type="footnote_reference"] {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.milkdown .ProseMirror sup[data-type="footnote_reference"]::before {
+  content: "[";
+}
+
+.milkdown .ProseMirror sup[data-type="footnote_reference"]::after {
+  content: "]";
+}
+
+/* 任务列表：github-markdown-css 已给 .task-list-item 去 marker 并给 checkbox 留位；preview 下不可点 */
+.milkdown .ProseMirror .rsmd-li-content {
+  display: inline-block;
+  vertical-align: top;
+  width: calc(100% - 1.2em);
+}
+
+.milkdown .ProseMirror li:not(.task-list-item) > .rsmd-li-content {
+  display: block;
+  width: auto;
+}
+
+.milkdown .ProseMirror[contenteditable="false"] .task-list-item-checkbox {
+  pointer-events: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rsmd-preview-block__preview[data-error],
+  .rsmd-math-inline[data-error] {
+    background: #490202;
+    color: #ff8182;
+  }
+}
+
 /* View → Wrap Code Lines：代码块改为换行而非块内横滚（默认关，保持 GitHub 原样）。
    github-markdown-css 给 pre > code 定了 white-space: pre，要一起覆盖；
    overflow-wrap: anywhere 让超长 token 也能断开。表格/公式无法换行，仍是块内滚动 */
-body[data-wrap-code="on"] .cm-content .markdown-body pre,
-body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
+body[data-wrap-code="on"] .milkdown .markdown-body pre,
+body[data-wrap-code="on"] .milkdown .markdown-body pre > code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -597,26 +736,88 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
   }
 }
 
-.mermaid-block {
-  background: transparent;
-  text-align: center;
-}
-
-.enhance-error {
-  margin-top: 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: #ffebe9;
-  color: #cf222e;
-  font-size: 12px;
+/* ---- 浮条 / 弹窗（TooltipProvider 定位，挂在 .milkdown 下）：data-show 控制显隐。
+   z-index 要压过悬浮顶栏 #tablist(1)：浮条可能出现在文档顶部，被顶栏盖住就点不到 ---- */
+.rsmd-linkbar,
+.rsmd-tablebar,
+.rsmd-mathpop {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--chrome-bg);
+  color: var(--chrome-fg);
   font-family: var(--chrome-font);
+  font-size: 12px;
+  /* 描边走 --chrome-hairline（同 .settings-panel）：暗色下黑阴影落在 #0d1117 上几乎看不见，
+     全靠这条 hairline 把浮条的边界压出来 */
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14), 0 0 0 0.5px var(--chrome-hairline);
 }
 
-@media (prefers-color-scheme: dark) {
-  .enhance-error {
-    background: #490202;
-    color: #ff8182;
-  }
+.rsmd-linkbar[data-show="false"],
+.rsmd-tablebar[data-show="false"],
+.rsmd-mathpop[data-show="false"] {
+  display: none;
+}
+
+.rsmd-linkbar button,
+.rsmd-tablebar button {
+  all: unset;
+  cursor: default;
+  padding: 2px 6px;
+  border-radius: 5px;
+  line-height: 1.4;
+}
+
+.rsmd-linkbar button:hover,
+.rsmd-tablebar button:not(:disabled):hover {
+  background: var(--chrome-hover);
+}
+
+/* 表头行不能删、表头前不能插普通行时按钮 disabled（plugins/tableBar.ts）：
+   all: unset 把原生 disabled 的灰化也抹掉了，这里补回 */
+.rsmd-tablebar button:disabled {
+  opacity: 0.35;
+}
+
+.rsmd-linkbar__href {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--chrome-fg-muted);
+  padding: 0 4px;
+}
+
+.rsmd-linkbar__input,
+.rsmd-mathpop input {
+  all: unset;
+  min-width: 260px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--chrome-input-bg);
+  font: inherit;
+}
+
+/* 显示态 / 编辑态互斥 */
+.rsmd-linkbar[data-mode="show"] .rsmd-linkbar__input,
+.rsmd-linkbar[data-mode="edit"] .rsmd-linkbar__href,
+.rsmd-linkbar[data-mode="edit"] button {
+  display: none;
+}
+
+/* 编辑中的可预览块：淡淡一道边，提示这是源码态。
+   用 outline 而不是 inset box-shadow：装饰落在 .rsmd-preview-block 外层 div 上，而里面的
+   pre 铺满同一个盒且自带不透明底色，会把父元素的内阴影盖掉（暗色下只剩四角一点蓝）；
+   outline 在绘制顺序里排在后代之后，offset -1px 让它落在盒内、不与相邻块重叠。
+   圆角与 pre 的 8px 一致 */
+.rsmd-editing {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 8px;
 }
 
 /* ---- Settings 面板：遮罩微模糊 + 居中卡片，入场缩放淡入。z-index 要压过 #tablist(1)。
@@ -848,4 +1049,74 @@ body[data-wrap-code="on"] .cm-content .markdown-body pre > code {
 .banner-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* ---- 底部状态栏：路径 · 字数 · 模式切换。#main 内的普通 flex 项，sideList 布局下侧栏保持通高
+   （Finder / Xcode 式）。无文档时保留空条，模式控件禁用 ---- */
+#statusbar {
+  flex: none;
+  position: relative;
+  z-index: 1; /* 同 #tablist：hairline 要压在 pane 之上 */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  height: var(--rsmd-statusbar-h);
+  padding: 0 8px 0 14px;
+  background: var(--chrome-bg);
+  box-shadow: 0 -1px 0 var(--chrome-hairline);
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  color: var(--chrome-fg-muted);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.status-path {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* 目录段可截断、文件名永远完整：窄窗口下先牺牲前面的路径 */
+.status-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-name {
+  flex: none;
+  color: var(--chrome-fg);
+}
+
+.status-stats {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings 面板分段控件的紧凑版 */
+.segmented-compact {
+  flex: none;
+  padding: 1px;
+  border-radius: 5px;
+}
+
+.segmented-compact .segment {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--chrome-fg-muted);
+}
+
+.segmented-compact .segment:has(input:checked) {
+  color: var(--chrome-fg);
+}
+
+.segmented-compact:has(input:disabled) {
+  opacity: 0.45;
 }

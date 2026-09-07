@@ -49,6 +49,7 @@ describe("shell store", () => {
       error: null,
       dirty: {},
       modes: {},
+      stats: {},
       conflicts: {},
     });
   });
@@ -232,6 +233,23 @@ describe("shell store", () => {
       const after = useShellStore.getState();
       s().setMode(1, "live");
       expect(useShellStore.getState()).toBe(after);
+    });
+
+    it("tracks per-doc text stats and drops them when the doc is removed", () => {
+      s().addDoc(meta(1), true);
+      expect(s().stats[1]).toBeUndefined();
+      s().setStats(1, { words: 3, chars: 10 });
+      expect(s().stats[1]).toEqual({ words: 3, chars: 10 });
+      s().removeDoc(1, null);
+      expect(s().stats[1]).toBeUndefined();
+    });
+
+    it("re-setting equal stats keeps the same state object (no subscriber wake-up)", () => {
+      s().addDoc(meta(1), true);
+      s().setStats(1, { words: 3, chars: 10 });
+      const before = useShellStore.getState();
+      s().setStats(1, { words: 3, chars: 10 });
+      expect(useShellStore.getState()).toBe(before);
     });
 
     it("conflict banner outranks the doc notice but not the global error", () => {

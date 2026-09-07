@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import type { DocId, DocMode, Settings } from "./ipc";
+import type { TextStats } from "./editor/textStats";
 
 export interface TabInfo {
   docId: DocId;
@@ -30,6 +31,8 @@ export interface ShellState {
   dirty: Readonly<Record<DocId, boolean>>; // 编辑器有未保存改动 → tab ●
   modes: Readonly<Record<DocId, DocMode>>; // 文档展示模式（live 下链接需 ⌘+点击）
   conflicts: Readonly<Record<DocId, boolean>>; // 编辑中收到外部改动，等 Reload
+  // 状态栏字数：编辑器创建后写入，之后随 meta 防抖更新；无编辑器（后台待命）即无键
+  stats: Readonly<Record<DocId, TextStats>>;
   // Rust Settings 的投影：null = 握手前尚未收到。面板改值本地先行写这里，
   // body.dataset 的 DOM 投影订阅本字段（settings/projection.ts），Rust 回声幂等
   settings: Settings | null;
@@ -44,6 +47,7 @@ export interface ShellState {
   setDirty(docId: DocId, dirty: boolean): void;
   setMode(docId: DocId, mode: DocMode): void;
   setConflict(docId: DocId, conflict: boolean): void;
+  setStats(docId: DocId, stats: TextStats): void;
   setSettings(settings: Settings): void;
   openSettings(): void;
   closeSettings(): void;
@@ -120,6 +124,7 @@ export const useShellStore = create<ShellState>()(
     dirty: {},
     modes: {},
     conflicts: {},
+    stats: {},
     settings: null,
     settingsOpen: false,
 
@@ -151,6 +156,7 @@ export const useShellStore = create<ShellState>()(
           dirty: without(s.dirty, docId),
           modes: without(s.modes, docId),
           conflicts: without(s.conflicts, docId),
+          stats: without(s.stats, docId),
         };
       });
     },
@@ -193,6 +199,13 @@ export const useShellStore = create<ShellState>()(
     },
     setConflict(docId, conflict) {
       set((s) => setFlag(s, "conflicts", docId, conflict));
+    },
+    setStats(docId, stats) {
+      set((s) => {
+        const cur = s.stats[docId];
+        if (cur && cur.words === stats.words && cur.chars === stats.chars) return s; // 值相同不唤醒订阅者
+        return { stats: { ...s.stats, [docId]: stats } };
+      });
     },
     setSettings(settings) {
       set((s) => (s.settings !== null && sameSettings(s.settings, settings) ? s : { settings }));

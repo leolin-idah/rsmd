@@ -113,7 +113,6 @@ pub fn run() {
             commands::activate_relative,
             commands::get_settings,
             commands::frontend_ready,
-            commands::render_markdown,
             commands::save_doc,
             commands::set_doc_state,
             commands::set_settings

@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>rsmd perf</title>
+    <style>
+      body { margin: 0; font: 14px -apple-system, sans-serif; }
+      #out { position: fixed; top: 0; right: 0; background: #ffe; padding: 8px; white-space: pre; z-index: 9; }
+      #editor { height: 100vh; }
+      .milkdown { height: 100%; overflow: auto; }
+      .ProseMirror { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+    </style>
+  </head>
+  <body>
+    <pre id="out"></pre>
+    <div id="editor"></div>
+    <script type="module" src="./perf.ts"></script>
+  </body>
+</html>
