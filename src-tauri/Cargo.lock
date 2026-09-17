@@ -3169,8 +3169,10 @@ name = "rsmd"
 version = "0.1.0"
 dependencies = [
  "comrak",
+ "dispatch2",
  "notify",
  "notify-debouncer-full",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "tauri",

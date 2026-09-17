@@ -220,7 +220,7 @@ body[data-layout="sideList"] #shell {
 
 /* ---- Tab 条 / 侧边列表（共用同一份数据与 DOM，方向由 data-layout 决定） ----
    隐藏式标题栏（titleBarStyle: Overlay）后这条兼任标题栏：
-   tabs 布局固定 40px 高、左侧让出红绿灯（trafficLightPosition x16/y14，按钮带 ≈68px）；
+   tabs 布局固定 40px 高、左侧让出红绿灯（x 用系统默认，按钮带到 ≈69px；垂直居中由 Rust traffic_lights 负责）；
    sideList 布局改为顶部让位。data-tauri-drag-region 在 TabBar.tsx 上，空白处拖窗。 */
 
 #tablist {
@@ -252,7 +252,7 @@ body[data-layout="tabs"] #tablist {
   /* 静态占位而非悬浮层：滚动容器从顶栏下沿开始，滚动条才完整可见（悬浮会盖住滚动条顶端 40px） */
   flex-direction: row;
   align-items: center;
-  /* 40px = 红绿灯(12px 按钮 + y14 边距)垂直居中的标题栏高度；空 tab 条也保持此高 */
+  /* 40px 标题栏高，与 src-tauri traffic_lights.rs 的 HEADER_H 一致；空 tab 条也保持此高 */
   height: var(--rsmd-header-h);
   padding: 6px 8px 6px 78px;
   overflow-x: auto;

@@ -21,5 +21,9 @@ comrak = "0.39"
 notify = "8"
 notify-debouncer-full = "0.5"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSResponder", "NSWindow", "NSView", "NSControl", "NSButton"] }
+dispatch2 = "0.3"
+
 [dev-dependencies]
 tempfile = "3"

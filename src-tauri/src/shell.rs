@@ -88,6 +88,8 @@ impl Shell for AppHandle {
     fn set_title(&self, title: &str) {
         if let Some(w) = self.get_webview_window("main") {
             let _ = w.set_title(title);
+            #[cfg(target_os = "macos")]
+            crate::traffic_lights::center_after_title(w.as_ref().window());
         }
     }
 

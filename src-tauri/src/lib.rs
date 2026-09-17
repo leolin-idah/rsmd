@@ -10,6 +10,8 @@ pub mod render;
 pub mod session;
 pub mod settings;
 pub mod shell;
+#[cfg(target_os = "macos")]
+pub mod traffic_lights;
 pub mod watcher;
 
 use session::AppState;
@@ -54,6 +56,10 @@ pub fn run() {
             let recent = recent::load(&shell::config_dir(handle));
             let menu = menu::build_menu(handle, &app.state::<AppState>(), &recent)?;
             app.set_menu(menu)?;
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                traffic_lights::center(&w.as_ref().window());
+            }
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -117,15 +123,22 @@ pub fn run() {
             commands::set_doc_state,
             commands::set_settings
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // 红点关窗：有脏文档先问；用户选丢弃后 session 调 app.exit，再次进入时不再脏
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
                 if session::any_dirty(app) {
                     api.prevent_close();
                     session::request_quit(app);
                 }
             }
+            // 系统布局会把红绿灯重置回默认位置，这几类事件后重贴
+            #[cfg(target_os = "macos")]
+            tauri::WindowEvent::Resized(_)
+            | tauri::WindowEvent::Focused(_)
+            | tauri::WindowEvent::ThemeChanged(_)
+            | tauri::WindowEvent::ScaleFactorChanged { .. } => traffic_lights::center(window),
+            _ => {}
         });
 
     let app = builder
