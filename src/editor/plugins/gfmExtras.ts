@@ -1,6 +1,8 @@
 import { listItemSchema } from "@milkdown/preset-commonmark";
+import { tableSchema } from "@milkdown/preset-gfm";
 import type { Node as PmNode } from "@milkdown/prose/model";
 import { Plugin } from "@milkdown/prose/state";
+import { TableView } from "@milkdown/prose/tables";
 import type { NodeView } from "@milkdown/prose/view";
 import { $prose, $view } from "@milkdown/utils";
 import type { Feature } from "../pmEditor";
@@ -65,6 +67,10 @@ const taskItemView = $view(listItemSchema.node, () => (node, view, getPos): Node
   };
 });
 
+/// 表格撑满内容栏后不能再自己横向滚动，借 prosemirror-tables 的 TableView 外包一层 .tableWrapper 来滚
+/// （样式见 theme.css）。单元格最小宽度给 25px，比单元格 padding 还小，等于不额外限宽
+const tableView = $view(tableSchema.node, () => (node): NodeView => new TableView(node, 25));
+
 /// 点击脚注引用滚到定义（定义就地渲染成 dl，见 theme.css）
 const footnoteJump = $prose(
   () =>
@@ -85,4 +91,4 @@ const footnoteJump = $prose(
     })
 );
 
-export const gfmExtrasFeature: Feature = { plugins: [taskItemView, footnoteJump] };
+export const gfmExtrasFeature: Feature = { plugins: [taskItemView, tableView, footnoteJump] };

@@ -174,6 +174,27 @@ body[data-layout="sideList"] #shell {
   margin-bottom: var(--rsmd-block-gap);
 }
 
+/* 表格撑满内容栏：github-markdown-css 用 display:block + max-content 让表格按内容收缩，
+   改回 display:table 才能撑满；横向滚动交给外层 .tableWrapper（plugins/gfmExtras.ts）。
+   tables.css 的 table-layout:fixed 会让各列等分，改回 auto 按内容分配。
+   块间距挪到 wrapper 上，表格自身外边距清零 */
+.milkdown .markdown-body .tableWrapper {
+  overflow-x: auto;
+}
+
+.milkdown .markdown-body .tableWrapper:not(:last-child) {
+  margin-bottom: var(--rsmd-block-gap);
+}
+
+.milkdown .markdown-body .tableWrapper > table {
+  display: table;
+  width: 100%;
+  max-width: none;
+  overflow: visible;
+  table-layout: auto;
+  margin: 0;
+}
+
 /* 列表项的内容包在 .rsmd-li-content 里（任务框节点视图，plugins/gfmExtras.ts），
    github-markdown-css 的 li>p 与 >*:last-child 都不再命中；而 ProseMirror 里紧凑列表项
    同样含一个 paragraph，段落自带的下外边距会让每项都拖一档空白，这里首尾自己清零。
